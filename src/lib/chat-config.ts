@@ -4,12 +4,14 @@ export const USERS = {
     name: "Moi",
     email: process.env.NEXT_PUBLIC_APP_USER_ME_EMAIL || "me@example.com",
     accent: "#8b5cf6",
+    photoURL: null as string | null,
   },
   friend: {
     id: "friend",
     name: "Ami",
     email: process.env.NEXT_PUBLIC_APP_USER_FRIEND_EMAIL || "friend@example.com",
     accent: "#22c55e",
+    photoURL: null as string | null,
   },
 } as const;
 

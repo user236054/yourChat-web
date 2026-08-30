@@ -1,10 +1,13 @@
 "use client";
 
-import { onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
+import { onAuthStateChanged, signOut as firebaseSignOut, updateProfile } from "firebase/auth";
+import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import {
   Check,
   CheckCheck,
+  ImagePlus,
   LogOut,
+  Menu,
   MessageSquareReply,
   Mic,
   MicOff,
@@ -17,11 +20,13 @@ import {
   Plus,
   Search,
   SendHorizontal,
+  Settings,
   Smile,
   Square,
   SunMedium,
   Trash2,
   Pencil,
+  UserCircle2,
   Video,
   X,
   PinOff,
@@ -30,7 +35,7 @@ import { useRouter } from "next/navigation";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { clearStoredUser, getStoredUser, getUserByEmail, setStoredUser, USERS, type UserKey } from "@/lib/chat-config";
 import { loadMessages, saveMessages, type ChatMessage } from "@/lib/chat-store";
-import { auth, isFirebaseConfigured } from "@/lib/firebase";
+import { auth, db, isFirebaseConfigured } from "@/lib/firebase";
 import {
   deleteMessage,
   markConversationMessagesAsRead,
@@ -83,6 +88,10 @@ export default function ChatPage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [profilePanelOpen, setProfilePanelOpen] = useState(false);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
+  const [profilePhotoLoading, setProfilePhotoLoading] = useState(false);
 
   useEffect(() => {
     setNotificationPermission(getNotificationPermissionState());
@@ -209,6 +218,7 @@ export default function ChatPage() {
   const partner = activeUser === "me" ? USERS.friend : USERS.me;
   const isComposerDisabled = loadingAuth !== false || !activeUser || uploading;
   const currentUserUid = auth?.currentUser?.uid;
+  const currentUserDisplayName = auth?.currentUser?.displayName || (activeUser ? USERS[activeUser].name : "Utilisateur");
   const messageById = Object.fromEntries(messages.map((message) => [message.id, message]));
   const pinnedMessage = pinnedMessageId ? messageById[pinnedMessageId] : null;
   const replyMessage = replyToMessageId ? messageById[replyToMessageId] : null;
@@ -255,6 +265,112 @@ export default function ChatPage() {
       };
 
   const QUICK_REACTIONS = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
+
+  const getInitials = (name: string) => {
+    const cleanName = name.trim();
+    if (!cleanName) return "U";
+
+    const parts = cleanName.split(/\s+/).filter(Boolean).slice(0, 2);
+    return parts.map((part) => part[0]?.toUpperCase() ?? "").join("") || "U";
+  };
+
+  const getAvatarStyle = (name: string, accent?: string) => {
+    const colors = ["#8b5cf6", "#3b82f6", "#22c55e", "#f59e0b", "#ec4899", "#f97316"];
+    const hash = [...name].reduce((total, char) => total + char.charCodeAt(0), 0);
+    const background = accent || colors[hash % colors.length];
+
+    return {
+      background,
+      color: "#ffffff",
+      fontWeight: 700,
+    } as const;
+  };
+
+  const saveCurrentUserPhoto = async (nextPhotoUrl: string | null) => {
+    if (!isFirebaseConfigured || !auth?.currentUser || !db) return;
+
+    await setDoc(
+      doc(db, "users", auth.currentUser.uid),
+      {
+        uid: auth.currentUser.uid,
+        email: auth.currentUser.email ?? "",
+        displayName: auth.currentUser.displayName || currentUserDisplayName || "Utilisateur",
+        photoURL: nextPhotoUrl ?? null,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    setProfilePhotoUrl(nextPhotoUrl ?? null);
+  };
+
+  const handleProfilePhotoUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setProfilePhotoLoading(true);
+      const result = await uploadToCloudinary(file);
+      if (!auth?.currentUser) {
+        throw new Error("Utilisateur non connecté.");
+      }
+
+      await saveCurrentUserPhoto(result.url);
+      await updateProfile(auth.currentUser, { photoURL: result.url });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Le changement de photo a échoué.");
+    } finally {
+      setProfilePhotoLoading(false);
+      event.target.value = "";
+    }
+  };
+
+  const deleteProfilePhoto = async () => {
+    try {
+      if (!auth?.currentUser) {
+        throw new Error("Utilisateur non connecté.");
+      }
+
+      await saveCurrentUserPhoto(null);
+      await updateProfile(auth.currentUser, { photoURL: null });
+    } catch (error) {
+      alert("La suppression de la photo a échoué.");
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      if (!auth) {
+        clearStoredUser();
+        router.push("/login");
+        return;
+      }
+
+      await firebaseSignOut(auth);
+      clearStoredUser();
+      router.push("/login");
+    } catch (error) {
+      console.error("Sign out failed", error);
+    }
+  };
+
+  useEffect(() => {
+    const currentUser = auth?.currentUser;
+
+    if (!isFirebaseConfigured || !currentUser || !db) {
+      setProfilePhotoUrl(null);
+      return;
+    }
+
+    const profileRef = doc(db, "users", currentUser.uid);
+    const unsubscribe = onSnapshot(profileRef, (snapshot) => {
+      const data = snapshot.data() as { photoURL?: string | null; displayName?: string | null } | undefined;
+      const nextPhoto = data?.photoURL ?? currentUser.photoURL ?? null;
+      setProfilePhotoUrl(nextPhoto);
+    });
+
+    return () => unsubscribe();
+  }, [auth?.currentUser?.uid, isFirebaseConfigured]);
 
   const toggleMessageReaction = async (messageId: string, emoji: string) => {
     if (isFirebaseConfigured && auth?.currentUser) {
@@ -699,6 +815,9 @@ export default function ChatPage() {
     opacity: 0.9,
   };
 
+  const sidebarUserPhoto = profilePhotoUrl || auth?.currentUser?.photoURL || null;
+  const sidebarAvatarStyle = getAvatarStyle(currentUserDisplayName, partner.accent);
+
   return (
     <main
       style={{
@@ -715,488 +834,869 @@ export default function ChatPage() {
         style={{
           width: "100%",
           height: "100%",
-          background: palette.panelBg,
-          border: "none",
-          borderRadius: 0,
-          boxShadow: "none",
-          overflow: "hidden",
           display: "flex",
-          flexDirection: "column",
-          minHeight: "100dvh",
+          background: palette.panelBg,
+          overflow: "hidden",
         }}
       >
-        <header
+        <aside
           style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 10,
-            padding: "16px 18px",
-            borderBottom: `1px solid ${palette.border}`,
-            background: palette.headerBg,
+            width: 300,
+            minWidth: 300,
+            borderRight: `1px solid ${palette.border}`,
+            background: theme === "dark" ? "rgba(15, 23, 42, 0.96)" : "rgba(255,255,255,0.96)",
             backdropFilter: "blur(12px)",
             display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            color: palette.text,
+            flexDirection: "column",
+            padding: 18,
+            gap: 18,
+            position: "relative",
+            zIndex: 30,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
-            <div
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: "50%",
-                background: partner.accent,
-                display: "grid",
-                placeItems: "center",
-                color: "#ffffff",
-                fontWeight: 700,
-                fontSize: 16,
-                flexShrink: 0,
-                position: "relative",
-                boxShadow: `0 10px 24px ${partner.accent}55`,
-              }}
-            >
-              {partner.name.charAt(0).toUpperCase()}
-              <span
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
                 style={{
-                  position: "absolute",
-                  right: 1,
-                  bottom: 1,
-                  width: 10,
-                  height: 10,
+                  width: 52,
+                  height: 52,
                   borderRadius: "50%",
-                  background: partnerOnline ? "#22c55e" : "#94a3b8",
-                  border: `2px solid ${theme === "dark" ? "#0f172a" : "#ffffff"}`,
-                  boxShadow: "0 0 0 3px rgba(34, 197, 94, 0.16)",
+                  overflow: "hidden",
+                  border: `2px solid ${palette.border}`,
+                  background: sidebarAvatarStyle.background,
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
                 }}
-              />
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ color: palette.text, fontWeight: 700, fontSize: 16 }}>{partner.name}</div>
-              <div style={{ color: palette.textMuted, fontSize: 12, marginTop: 2 }}>
-                {partnerTyping ? "Écrit..." : partnerOnline ? "En ligne" : "Hors ligne"}
+              >
+                {sidebarUserPhoto ? (
+                  <img src={sidebarUserPhoto} alt={currentUserDisplayName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  <span style={{ fontSize: 18, lineHeight: 1 }}>{getInitials(currentUserDisplayName)}</span>
+                )}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: palette.text, fontWeight: 700, fontSize: 16, lineHeight: 1.3 }}>{currentUserDisplayName}</div>
+                <div style={{ color: palette.textMuted, fontSize: 12 }}>En ligne</div>
               </div>
             </div>
-          </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button type="button" aria-label="Recherche" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
-              <Search size={16} />
-            </button>
-            <button type="button" aria-label="Appel audio" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
-              <Phone size={16} />
-            </button>
-            <button type="button" aria-label="Appel vidéo" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
-              <Video size={16} />
-            </button>
             <button
               type="button"
-              aria-label="Menu du contact"
-              onClick={() => setMenuOpenId((current) => (current === "header" ? null : "header"))}
-              style={{ ...headerActionStyle, color: palette.textMuted }}
+              aria-label="Paramètres du profil"
+              onClick={() => setProfilePanelOpen((current) => !current)}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 12,
+                border: `1px solid ${palette.border}`,
+                background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(248,250,252,0.9)",
+                color: palette.text,
+                display: "grid",
+                placeItems: "center",
+                cursor: "pointer",
+              }}
             >
-              <MoreVertical size={16} />
+              <Settings size={17} />
             </button>
           </div>
-        </header>
 
-        {pinnedMessage ? (
           <div
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 12,
-              background: "#eff6ff",
-              borderBottom: "1px solid rgba(148,163,184,0.12)",
-              padding: "10px 18px",
-              color: "#1e3a8a",
-              fontSize: 13,
-              fontWeight: 600,
+              gap: 8,
+              padding: "10px 12px",
+              borderRadius: 14,
+              border: `1px solid ${palette.border}`,
+              background: theme === "dark" ? "rgba(15, 23, 42, 0.7)" : "rgba(248, 250, 252, 0.9)",
+              color: palette.text,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-              <Pin size={15} />
-              <span>Message épinglé</span>
-            </div>
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+              {theme === "dark" ? <Moon size={16} /> : <SunMedium size={16} />}
+              Thème
+            </span>
             <button
               type="button"
-              onClick={() => void unpinMessage()}
+              onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
               style={{
+                width: 48,
+                height: 28,
+                borderRadius: 999,
                 border: "none",
-                background: "transparent",
-                color: "#1e3a8a",
+                background: theme === "dark" ? "#8b5cf6" : "#cbd5e1",
+                position: "relative",
                 cursor: "pointer",
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
+                padding: 0,
               }}
             >
-              <PinOff size={14} />
-              Désépingler
+              <span
+                style={{
+                  position: "absolute",
+                  top: 4,
+                  left: theme === "dark" ? 26 : 4,
+                  width: 20,
+                  height: 20,
+                  borderRadius: "50%",
+                  background: "#ffffff",
+                  boxShadow: "0 2px 8px rgba(15, 23, 42, 0.18)",
+                  transition: "left 180ms ease",
+                }}
+              />
             </button>
+          </div>
+
+          <div style={{ display: "grid", gap: 8, flex: 1 }}>
+            <div style={{ color: palette.textMuted, fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", padding: "0 8px" }}>
+              Options
+            </div>
+            <div
+              style={{
+                border: `1px dashed ${palette.border}`,
+                borderRadius: 14,
+                padding: 14,
+                minHeight: 120,
+                background: theme === "dark" ? "rgba(15,23,42,0.5)" : "rgba(248,250,252,0.8)",
+                color: palette.textMuted,
+                display: "grid",
+                placeItems: "center",
+                textAlign: "center",
+              }}
+            >
+              Espace prêt pour de nouvelles options.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSignOut}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              border: "1px solid rgba(239,68,68,0.25)",
+              borderRadius: 14,
+              padding: "12px 14px",
+              background: theme === "dark" ? "rgba(127, 29, 29, 0.2)" : "rgba(254, 242, 242, 0.9)",
+              color: "#ef4444",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            <LogOut size={17} />
+            Se déconnecter
+          </button>
+        </aside>
+
+        {profilePanelOpen ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 310,
+              top: 20,
+              width: 300,
+              background: palette.floating,
+              border: `1px solid ${palette.border}`,
+              borderRadius: 18,
+              boxShadow: "0 24px 56px rgba(15, 23, 42, 0.14)",
+              padding: 18,
+              zIndex: 40,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+              <div style={{ color: palette.text, fontWeight: 700, fontSize: 18 }}>Profil</div>
+              <button
+                type="button"
+                onClick={() => setProfilePanelOpen(false)}
+                style={{ border: "none", background: "transparent", color: palette.textMuted, cursor: "pointer" }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", placeItems: "center", marginBottom: 16 }}>
+              <div
+                style={{
+                  width: 96,
+                  height: 96,
+                  borderRadius: "50%",
+                  overflow: "hidden",
+                  border: `3px solid ${palette.border}`,
+                  background: getAvatarStyle(currentUserDisplayName).background,
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                {sidebarUserPhoto ? (
+                  <img src={sidebarUserPhoto} alt={currentUserDisplayName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  <span style={{ fontSize: 28 }}>{getInitials(currentUserDisplayName)}</span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  background: theme === "dark" ? "rgba(139,92,246,0.2)" : "#ede9fe",
+                  color: palette.text,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                <ImagePlus size={16} />
+                {profilePhotoLoading ? "Téléchargement..." : "Changer la photo"}
+                <input type="file" accept="image/*" onChange={handleProfilePhotoUpload} style={{ display: "none" }} />
+              </label>
+
+              <button
+                type="button"
+                onClick={deleteProfilePhoto}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  border: `1px solid ${palette.border}`,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(255,255,255,0.8)",
+                  color: palette.text,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                <Trash2 size={15} />
+                Supprimer la photo
+              </button>
+            </div>
           </div>
         ) : null}
 
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <section
+          <header
             style={{
-              flex: 1,
-              overflowY: "auto",
-              padding: "22px 18px",
-              display: "grid",
-              gap: 14,
-              background: palette.pageBg,
+              position: "sticky",
+              top: 0,
+              zIndex: 10,
+              padding: "16px 18px",
+              borderBottom: `1px solid ${palette.border}`,
+              background: palette.headerBg,
+              backdropFilter: "blur(12px)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              color: palette.text,
             }}
           >
-            {messages.length === 0 && !loadingAuth ? (
-              <div
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
+              <button
+                type="button"
+                aria-label="Ouvrir le menu"
+                onClick={() => setSidebarOpen((current) => !current)}
                 style={{
-                  placeSelf: "center",
-                  textAlign: "center",
-                  color: palette.textMuted,
-                  maxWidth: 360,
-                  padding: "28px 18px",
-                  borderRadius: 18,
-                  background: palette.surface,
+                  display: "grid",
+                  placeItems: "center",
+                  width: 36,
+                  height: 36,
+                  borderRadius: 12,
                   border: `1px solid ${palette.border}`,
-                  boxShadow: palette.bubbleShadow,
+                  background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(255,255,255,0.8)",
+                  color: palette.text,
+                  cursor: "pointer",
                 }}
               >
-                Aucun message pour le moment. Commencez la conversation.
+                <Menu size={18} />
+              </button>
+
+              <div
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: "50%",
+                  background: partner.accent,
+                  display: "grid",
+                  placeItems: "center",
+                  color: "#ffffff",
+                  fontWeight: 700,
+                  fontSize: 16,
+                  flexShrink: 0,
+                  position: "relative",
+                  overflow: "hidden",
+                  boxShadow: `0 10px 24px ${partner.accent}55`,
+                }}
+              >
+                {partner.photoURL ? (
+                  <img src={partner.photoURL} alt={partner.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  partner.name.charAt(0).toUpperCase()
+                )}
+                <span
+                  style={{
+                    position: "absolute",
+                    right: 1,
+                    bottom: 1,
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: partnerOnline ? "#22c55e" : "#94a3b8",
+                    border: `2px solid ${theme === "dark" ? "#0f172a" : "#ffffff"}`,
+                    boxShadow: "0 0 0 3px rgba(34, 197, 94, 0.16)",
+                  }}
+                />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: palette.text, fontWeight: 700, fontSize: 16 }}>{partner.name}</div>
+                <div style={{ color: palette.textMuted, fontSize: 12, marginTop: 2 }}>
+                  {partnerTyping ? "Écrit..." : partnerOnline ? "En ligne" : "Hors ligne"}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button type="button" aria-label="Recherche" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+                <Search size={16} />
+              </button>
+              <button type="button" aria-label="Appel audio" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+                <Phone size={16} />
+              </button>
+              <button type="button" aria-label="Appel vidéo" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+                <Video size={16} />
+              </button>
+              <button
+                type="button"
+                aria-label="Menu du contact"
+                onClick={() => setMenuOpenId((current) => (current === "header" ? null : "header"))}
+                style={{ ...headerActionStyle, color: palette.textMuted }}
+              >
+                <MoreVertical size={16} />
+              </button>
+            </div>
+          </header>
+
+          {sidebarOpen ? (
+            <div
+              onClick={() => setSidebarOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(15, 23, 42, 0.28)",
+                zIndex: 25,
+              }}
+            />
+          ) : null}
+
+          {sidebarOpen ? (
+            <div
+              style={{
+                position: "fixed",
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: 300,
+                background: theme === "dark" ? "rgba(15, 23, 42, 0.98)" : "rgba(255,255,255,0.98)",
+                borderRight: `1px solid ${palette.border}`,
+                zIndex: 26,
+                display: "flex",
+                flexDirection: "column",
+                padding: 18,
+                gap: 18,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setSidebarOpen(false)}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    border: `1px solid ${palette.border}`,
+                    background: "transparent",
+                    color: palette.text,
+                    display: "grid",
+                    placeItems: "center",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div
+                  style={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: "50%",
+                    overflow: "hidden",
+                    border: `2px solid ${palette.border}`,
+                    background: sidebarAvatarStyle.background,
+                    display: "grid",
+                    placeItems: "center",
+                  }}
+                >
+                  {sidebarUserPhoto ? (
+                    <img src={sidebarUserPhoto} alt={currentUserDisplayName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <span>{getInitials(currentUserDisplayName)}</span>
+                  )}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: palette.text, fontWeight: 700 }}>{currentUserDisplayName}</div>
+                  <div style={{ color: palette.textMuted, fontSize: 12 }}>Compte principal</div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setProfilePanelOpen((current) => !current);
+                  setSidebarOpen(false);
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  borderRadius: 12,
+                  border: `1px solid ${palette.border}`,
+                  padding: "10px 12px",
+                  background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(248,250,252,0.9)",
+                  color: palette.text,
+                  cursor: "pointer",
+                }}
+              >
+                <Settings size={16} />
+                Profil
+              </button>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 10px", borderRadius: 12, border: `1px solid ${palette.border}`, background: theme === "dark" ? "rgba(15,23,42,0.7)" : "rgba(248,250,252,0.9)" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, color: palette.text, fontWeight: 600 }}>
+                  {theme === "dark" ? <Moon size={16} /> : <SunMedium size={16} />}
+                  Thème
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+                  style={{ width: 48, height: 28, borderRadius: 999, border: "none", background: theme === "dark" ? "#8b5cf6" : "#cbd5e1", position: "relative", cursor: "pointer", padding: 0 }}
+                >
+                  <span style={{ position: "absolute", top: 4, left: theme === "dark" ? 26 : 4, width: 20, height: 20, borderRadius: "50%", background: "#ffffff", boxShadow: "0 2px 8px rgba(15, 23, 42, 0.18)", transition: "left 180ms ease" }} />
+                </button>
+              </div>
+
+              <div style={{ display: "grid", gap: 8, flex: 1 }}>
+                <div style={{ color: palette.textMuted, fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", padding: "0 8px" }}>Options</div>
+                <div style={{ border: `1px dashed ${palette.border}`, borderRadius: 14, padding: 14, minHeight: 120, background: theme === "dark" ? "rgba(15,23,42,0.5)" : "rgba(248,250,252,0.8)", color: palette.textMuted, display: "grid", placeItems: "center", textAlign: "center" }}>Espace prêt pour de nouvelles options.</div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSignOut}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, border: "1px solid rgba(239,68,68,0.25)", borderRadius: 14, padding: "12px 14px", background: theme === "dark" ? "rgba(127, 29, 29, 0.2)" : "rgba(254, 242, 242, 0.9)", color: "#ef4444", fontWeight: 700, cursor: "pointer" }}
+              >
+                <LogOut size={17} />
+                Se déconnecter
+              </button>
+            </div>
+          ) : null}
+
+          {profilePanelOpen ? (
+            <div
+              onClick={() => setProfilePanelOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(15, 23, 42, 0.14)",
+                zIndex: 30,
+              }}
+            />
+          ) : null}
+
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {pinnedMessage ? (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  background: "#eff6ff",
+                  borderBottom: "1px solid rgba(148,163,184,0.12)",
+                  padding: "10px 18px",
+                  color: "#1e3a8a",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <Pin size={15} />
+                  <span>Message épinglé</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void unpinMessage()}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#1e3a8a",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <PinOff size={14} />
+                  Désépingler
+                </button>
               </div>
             ) : null}
 
-            {messages.map((message, index) => {
-              const isMine = message.sender === activeUser;
-              const isDeleted = Boolean(message.isDeleted);
-              const canManageOwnMessage = Boolean(
-                (message.senderId && currentUserUid && message.senderId === currentUserUid) ||
-                  (!message.senderId && isMine),
-              );
-              const referenceMessage = message.replyTo ? messageById[message.replyTo] : null;
-              const bubbleText = isDeleted ? "Ce message a été supprimé" : message.text || "";
-              const previousMessage = index > 0 ? messages[index - 1] : null;
-              const showDateSeparator = !previousMessage || new Date(previousMessage.createdAt).toDateString() !== new Date(message.createdAt).toDateString();
-              const readableTime = new Date(message.createdAt).toLocaleTimeString("fr-FR", {
-                hour: "2-digit",
-                minute: "2-digit",
-              });
-              const reactions = message.reactions ?? {};
-              const reactionCounts = Object.entries(reactions).reduce<Record<string, number>>((accumulator, [userId, emoji]) => {
-                accumulator[emoji] = (accumulator[emoji] ?? 0) + 1;
-                return accumulator;
-              }, {});
-              const currentUserReactionKey = activeUser ? USERS[activeUser].id : null;
-              const myReaction = currentUserReactionKey ? reactions[currentUserReactionKey] ?? null : null;
+            <section
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                padding: "22px 18px",
+                display: "grid",
+                gap: 14,
+                background: palette.pageBg,
+              }}
+            >
+              {messages.length === 0 && !loadingAuth ? (
+                <div
+                  style={{
+                    placeSelf: "center",
+                    textAlign: "center",
+                    color: palette.textMuted,
+                    maxWidth: 360,
+                    padding: "28px 18px",
+                    borderRadius: 18,
+                    background: palette.surface,
+                    border: `1px solid ${palette.border}`,
+                    boxShadow: palette.bubbleShadow,
+                  }}
+                >
+                  Aucun message pour le moment. Commencez la conversation.
+                </div>
+              ) : null}
 
-              return (
-                <div key={message.id} style={{ display: "grid", gap: 10 }}>
-                  {showDateSeparator ? (
+              {messages.map((message, index) => {
+                const isMine = message.sender === activeUser;
+                const isDeleted = Boolean(message.isDeleted);
+                const canManageOwnMessage = Boolean(
+                  (message.senderId && currentUserUid && message.senderId === currentUserUid) ||
+                    (!message.senderId && isMine),
+                );
+                const referenceMessage = message.replyTo ? messageById[message.replyTo] : null;
+                const bubbleText = isDeleted ? "Ce message a été supprimé" : message.text || "";
+                const previousMessage = index > 0 ? messages[index - 1] : null;
+                const showDateSeparator = !previousMessage || new Date(previousMessage.createdAt).toDateString() !== new Date(message.createdAt).toDateString();
+                const readableTime = new Date(message.createdAt).toLocaleTimeString("fr-FR", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                const reactions = message.reactions ?? {};
+                const reactionCounts = Object.entries(reactions).reduce<Record<string, number>>((accumulator, [userId, emoji]) => {
+                  accumulator[emoji] = (accumulator[emoji] ?? 0) + 1;
+                  return accumulator;
+                }, {});
+                const currentUserReactionKey = activeUser ? USERS[activeUser].id : null;
+                const myReaction = currentUserReactionKey ? reactions[currentUserReactionKey] ?? null : null;
+
+                return (
+                  <div key={message.id} style={{ display: "grid", gap: 10 }}>
+                    {showDateSeparator ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "center",
+                          alignItems: "center",
+                          width: "100%",
+                        }}
+                      >
+                        <div
+                          style={{
+                            background: theme === "dark" ? "rgba(148,163,184,0.12)" : "rgba(148,163,184,0.08)",
+                            color: palette.textMuted,
+                            borderRadius: 999,
+                            padding: "6px 12px",
+                            fontSize: 11,
+                            letterSpacing: "0.04em",
+                            textTransform: "uppercase",
+                            border: `1px solid ${palette.border}`,
+                          }}
+                        >
+                          {new Date(message.createdAt).toLocaleDateString("fr-FR", {
+                            weekday: "long",
+                            day: "numeric",
+                            month: "long",
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+
                     <div
                       style={{
                         display: "flex",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        width: "100%",
+                        justifyContent: isMine ? "flex-end" : "flex-start",
                       }}
                     >
                       <div
+                        ref={(node) => {
+                          if (node) {
+                            messageRefs.current[message.id] = node;
+                          }
+                        }}
+                        onMouseEnter={() => setReactionMenuOpenId((current) => current ?? message.id)}
+                        onMouseLeave={() => {
+                          setReactionMenuOpenId((current) => (current === message.id ? null : current));
+                        }}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
+                        }}
+                        onTouchStart={() => {
+                          setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
+                        }}
                         style={{
-                          background: theme === "dark" ? "rgba(148,163,184,0.12)" : "rgba(148,163,184,0.08)",
-                          color: palette.textMuted,
-                          borderRadius: 999,
-                          padding: "6px 12px",
-                          fontSize: 11,
-                          letterSpacing: "0.04em",
-                          textTransform: "uppercase",
-                          border: `1px solid ${palette.border}`,
+                          maxWidth: "76%",
+                          display: "grid",
+                          gap: 8,
                         }}
                       >
-                        {new Date(message.createdAt).toLocaleDateString("fr-FR", {
-                          weekday: "long",
-                          day: "numeric",
-                          month: "long",
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: isMine ? "flex-end" : "flex-start",
-                    }}
-                  >
-                    <div
-                      ref={(node) => {
-                        if (node) {
-                          messageRefs.current[message.id] = node;
-                        }
-                      }}
-                      onMouseEnter={() => setReactionMenuOpenId((current) => current ?? message.id)}
-                      onMouseLeave={() => {
-                        setReactionMenuOpenId((current) => (current === message.id ? null : current));
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
-                      }}
-                      onTouchStart={() => {
-                        setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
-                      }}
-                      style={{
-                        maxWidth: "76%",
-                        display: "grid",
-                        gap: 8,
-                      }}
-                    >
-                      {referenceMessage ? (
-                        <button
-                          type="button"
-                          onClick={() => handleScrollToMessage(referenceMessage.id || "")}
-                          style={{
-                            textAlign: "left",
-                            alignSelf: isMine ? "flex-end" : "flex-start",
-                            maxWidth: "90%",
-                            border: `1px solid ${palette.border}`,
-                            borderRadius: 12,
-                            padding: "8px 10px",
-                            background: theme === "dark" ? "rgba(15, 23, 42, 0.72)" : "rgba(255,255,255,0.72)",
-                            color: palette.text,
-                            fontSize: 12,
-                            cursor: "pointer",
-                          }}
-                        >
-                          <div style={{ color: palette.textMuted, fontSize: 11, marginBottom: 4 }}>
-                            Réponse à {referenceMessage.sender === activeUser ? "vous" : partner.name}
-                          </div>
-                          <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {getQuotedText(referenceMessage)}
-                          </div>
-                        </button>
-                      ) : null}
-
-                      <div style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 8 }}>
-                        {reactionMenuOpenId === message.id ? (
-                          <div
-                            style={{
-                              position: "absolute",
-                              right: isMine ? "100%" : "auto",
-                              left: isMine ? "auto" : "100%",
-                              top: -10,
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 6,
-                              background: palette.floating,
-                              border: `1px solid ${palette.border}`,
-                              borderRadius: 999,
-                              boxShadow: "0 12px 30px rgba(15, 23, 42, 0.12)",
-                              padding: "8px 10px",
-                              zIndex: 20,
-                              transform: isMine ? "translateX(-8px)" : "translateX(8px)",
-                            }}
-                          >
-                            {QUICK_REACTIONS.map((emoji) => (
-                              <button
-                                key={emoji}
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void toggleMessageReaction(message.id, emoji);
-                                }}
-                                style={{
-                                  width: 28,
-                                  height: 28,
-                                  border: "none",
-                                  borderRadius: 999,
-                                  background: myReaction === emoji ? "rgba(79, 124, 255, 0.12)" : "transparent",
-                                  fontSize: 16,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                {emoji}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-
-                        <div
-                          style={{
-                            flex: 1,
-                            background: isDeleted
-                              ? theme === "dark" ? "rgba(148, 163, 184, 0.1)" : "#f8fafc"
-                              : isMine
-                                ? palette.messageOutgoing
-                                : palette.messageIncoming,
-                            color: isDeleted ? palette.textMuted : isMine ? "#ffffff" : palette.text,
-                            borderRadius: isMine ? "18px 18px 6px 18px" : "18px 18px 18px 6px",
-                            padding: "12px 14px",
-                            boxShadow: palette.bubbleShadow,
-                            border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : "1px solid transparent",
-                            opacity: isDeleted ? 0.8 : 1,
-                            minWidth: 0,
-                            maxWidth: "100%",
-                            position: "relative",
-                          }}
-                        >
-                          {message.mediaUrl && !isDeleted ? (
-                            message.mediaType === "image" ? (
-                              <img
-                                src={message.mediaUrl}
-                                alt={message.fileName || "Image envoyée"}
-                                style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                              />
-                            ) : message.mediaType === "video" ? (
-                              <video
-                                src={message.mediaUrl}
-                                controls
-                                style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                              />
-                            ) : message.mediaType === "audio" ? (
-                              <div style={{ display: "grid", gap: 8, minWidth: 230 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-                                  <Mic size={14} />
-                                  <span>{message.fileName || "Message vocal"}</span>
-                                </div>
-                                <audio
-                                  controls
-                                  src={message.mediaUrl}
-                                  style={{ width: "100%", height: 34, outline: "none" }}
-                                />
-                                <div style={{ fontSize: 11, opacity: 0.8 }}>
-                                  {formatDuration(message.audioDuration ?? 0)}
-                                </div>
-                              </div>
-                            ) : (
-                              <a
-                                href={message.mediaUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                style={{
-                                  color: isMine ? "#ffffff" : "#3453d1",
-                                  textDecoration: "underline",
-                                  display: "block",
-                                  marginBottom: 8,
-                                  wordBreak: "break-all",
-                                }}
-                              >
-                                {message.fileName || "Fichier joint"}
-                              </a>
-                            )
-                          ) : null}
-
-                          {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
-
-                          <div
-                            style={{
-                              marginTop: 8,
-                              fontSize: 11,
-                              color: isDeleted ? palette.textMuted : isMine ? "rgba(255,255,255,0.8)" : palette.textMuted,
-                              display: "flex",
-                              justifyContent: "flex-end",
-                              alignItems: "center",
-                              gap: 6,
-                              flexWrap: "wrap",
-                            }}
-                          >
-                            <span>{readableTime}</span>
-                            {message.editedAt ? <span>• modifié</span> : null}
-                            {isMine ? (
-                              message.status === "read" ? <CheckCheck size={12} /> : <Check size={12} />
-                            ) : null}
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          aria-label="Ajouter une réaction"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
-                          }}
-                          style={{
-                            width: 22,
-                            height: 22,
-                            borderRadius: 999,
-                            border: `1px solid ${palette.border}`,
-                            background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(255,255,255,0.8)",
-                            color: palette.text,
-                            display: "grid",
-                            placeItems: "center",
-                            cursor: "pointer",
-                            flexShrink: 0,
-                          }}
-                        >
-                          <Smile size={12} />
-                        </button>
-
-                        <div style={{ position: "relative" }} onClick={(event) => event.stopPropagation()}>
+                        {referenceMessage ? (
                           <button
                             type="button"
-                            aria-label="Actions du message"
+                            onClick={() => handleScrollToMessage(referenceMessage.id || "")}
+                            style={{
+                              textAlign: "left",
+                              alignSelf: isMine ? "flex-end" : "flex-start",
+                              maxWidth: "90%",
+                              border: `1px solid ${palette.border}`,
+                              borderRadius: 12,
+                              padding: "8px 10px",
+                              background: theme === "dark" ? "rgba(15, 23, 42, 0.72)" : "rgba(255,255,255,0.72)",
+                              color: palette.text,
+                              fontSize: 12,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <div style={{ color: palette.textMuted, fontSize: 11, marginBottom: 4 }}>
+                              Réponse à {referenceMessage.sender === activeUser ? "vous" : partner.name}
+                            </div>
+                            <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {getQuotedText(referenceMessage)}
+                            </div>
+                          </button>
+                        ) : null}
+
+                        <div style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                          {reactionMenuOpenId === message.id ? (
+                            <div
+                              style={{
+                                position: "absolute",
+                                right: isMine ? "100%" : "auto",
+                                left: isMine ? "auto" : "100%",
+                                top: -10,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                                background: palette.floating,
+                                border: `1px solid ${palette.border}`,
+                                borderRadius: 999,
+                                boxShadow: "0 12px 30px rgba(15, 23, 42, 0.12)",
+                                padding: "8px 10px",
+                                zIndex: 20,
+                                transform: isMine ? "translateX(-8px)" : "translateX(8px)",
+                              }}
+                            >
+                              {QUICK_REACTIONS.map((emoji) => (
+                                <button
+                                  key={emoji}
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void toggleMessageReaction(message.id, emoji);
+                                  }}
+                                  style={{
+                                    width: 28,
+                                    height: 28,
+                                    border: "none",
+                                    borderRadius: 999,
+                                    background: myReaction === emoji ? "rgba(79, 124, 255, 0.12)" : "transparent",
+                                    fontSize: 16,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          <div
+                            style={{
+                              flex: 1,
+                              background: isDeleted
+                                ? theme === "dark" ? "rgba(148, 163, 184, 0.1)" : "#f8fafc"
+                                : isMine
+                                  ? palette.messageOutgoing
+                                  : palette.messageIncoming,
+                              color: isDeleted ? palette.textMuted : isMine ? "#ffffff" : palette.text,
+                              borderRadius: isMine ? "18px 18px 6px 18px" : "18px 18px 18px 6px",
+                              padding: "12px 14px",
+                              boxShadow: palette.bubbleShadow,
+                              border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : "1px solid transparent",
+                              opacity: isDeleted ? 0.8 : 1,
+                              minWidth: 0,
+                              maxWidth: "100%",
+                              position: "relative",
+                            }}
+                          >
+                            {message.mediaUrl && !isDeleted ? (
+                              message.mediaType === "image" ? (
+                                <img
+                                  src={message.mediaUrl}
+                                  alt={message.fileName || "Image envoyée"}
+                                  style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                                />
+                              ) : message.mediaType === "video" ? (
+                                <video
+                                  src={message.mediaUrl}
+                                  controls
+                                  style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                                />
+                              ) : message.mediaType === "audio" ? (
+                                <div style={{ display: "grid", gap: 8, minWidth: 230 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+                                    <Mic size={14} />
+                                    <span>{message.fileName || "Message vocal"}</span>
+                                  </div>
+                                  <audio
+                                    controls
+                                    src={message.mediaUrl}
+                                    style={{ width: "100%", height: 34, outline: "none" }}
+                                  />
+                                  <div style={{ fontSize: 11, opacity: 0.8 }}>
+                                    {formatDuration(message.audioDuration ?? 0)}
+                                  </div>
+                                </div>
+                              ) : (
+                                <a
+                                  href={message.mediaUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{
+                                    color: isMine ? "#ffffff" : "#3453d1",
+                                    textDecoration: "underline",
+                                    display: "block",
+                                    marginBottom: 8,
+                                    wordBreak: "break-all",
+                                  }}
+                                >
+                                  {message.fileName || "Fichier joint"}
+                                </a>
+                              )
+                            ) : null}
+
+                            {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
+
+                            <div
+                              style={{
+                                marginTop: 8,
+                                fontSize: 11,
+                                color: isDeleted ? palette.textMuted : isMine ? "rgba(255,255,255,0.8)" : palette.textMuted,
+                                display: "flex",
+                                justifyContent: "flex-end",
+                                alignItems: "center",
+                                gap: 6,
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span>{readableTime}</span>
+                              {message.editedAt ? <span>• modifié</span> : null}
+                              {isMine ? (
+                                message.status === "read" ? <CheckCheck size={12} /> : <Check size={12} />
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            aria-label="Ajouter une réaction"
                             onClick={(event) => {
                               event.stopPropagation();
-                              setMenuOpenId((current) => (current === message.id ? null : message.id));
+                              setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
                             }}
                             style={{
-                              width: 28,
-                              height: 28,
+                              width: 22,
+                              height: 22,
                               borderRadius: 999,
                               border: `1px solid ${palette.border}`,
-                              background: theme === "dark" ? "rgba(15,23,42,0.9)" : "rgba(255,255,255,0.8)",
+                              background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(255,255,255,0.8)",
                               color: palette.text,
                               display: "grid",
                               placeItems: "center",
                               cursor: "pointer",
+                              flexShrink: 0,
                             }}
                           >
-                            <MoreHorizontal size={14} />
+                            <Smile size={12} />
                           </button>
 
-                          {menuOpenId === message.id ? (
-                            <div
+                          <div style={{ position: "relative" }} onClick={(event) => event.stopPropagation()}>
+                            <button
+                              type="button"
+                              aria-label="Actions du message"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setMenuOpenId((current) => (current === message.id ? null : message.id));
+                              }}
                               style={{
-                                position: "absolute",
-                                right: 0,
-                                top: 36,
-                                zIndex: 20,
-                                minWidth: 180,
-                                background: palette.floating,
+                                width: 28,
+                                height: 28,
+                                borderRadius: 999,
                                 border: `1px solid ${palette.border}`,
-                                borderRadius: 14,
-                                boxShadow: "0 18px 44px rgba(15, 23, 42, 0.08)",
-                                padding: 8,
+                                background: theme === "dark" ? "rgba(15,23,42,0.9)" : "rgba(255,255,255,0.8)",
+                                color: palette.text,
                                 display: "grid",
-                                gap: 4,
+                                placeItems: "center",
+                                cursor: "pointer",
                               }}
                             >
-                              <button
-                                type="button"
-                                onClick={() => beginReplyMessage(message.id)}
+                              <MoreHorizontal size={14} />
+                            </button>
+
+                            {menuOpenId === message.id ? (
+                              <div
                                 style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 8,
-                                  background: "transparent",
-                                  border: "none",
-                                  color: palette.text,
-                                  padding: "8px 10px",
-                                  borderRadius: 8,
-                                  textAlign: "left",
-                                  cursor: "pointer",
+                                  position: "absolute",
+                                  right: 0,
+                                  top: 36,
+                                  zIndex: 20,
+                                  minWidth: 180,
+                                  background: palette.floating,
+                                  border: `1px solid ${palette.border}`,
+                                  borderRadius: 14,
+                                  boxShadow: "0 18px 44px rgba(15, 23, 42, 0.08)",
+                                  padding: 8,
+                                  display: "grid",
+                                  gap: 4,
                                 }}
                               >
-                                <MessageSquareReply size={14} />
-                                Répondre
-                              </button>
-                              {!isDeleted && canManageOwnMessage ? (
                                 <button
                                   type="button"
-                                  onClick={() => beginEditMessage(message)}
+                                  onClick={() => beginReplyMessage(message.id)}
                                   style={{
                                     display: "flex",
                                     alignItems: "center",
@@ -1210,241 +1710,306 @@ export default function ChatPage() {
                                     cursor: "pointer",
                                   }}
                                 >
-                                  <Pencil size={14} />
-                                  Modifier
+                                  <MessageSquareReply size={14} />
+                                  Répondre
                                 </button>
-                              ) : null}
-                              {!isDeleted && canManageOwnMessage ? (
+                                {!isDeleted && canManageOwnMessage ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => beginEditMessage(message)}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 8,
+                                      background: "transparent",
+                                      border: "none",
+                                      color: palette.text,
+                                      padding: "8px 10px",
+                                      borderRadius: 8,
+                                      textAlign: "left",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <Pencil size={14} />
+                                    Modifier
+                                  </button>
+                                ) : null}
+                                {!isDeleted && canManageOwnMessage ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteMessage(message.id)}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 8,
+                                      background: "transparent",
+                                      border: "none",
+                                      color: "#dc2626",
+                                      padding: "8px 10px",
+                                      borderRadius: 8,
+                                      textAlign: "left",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <Trash2 size={14} />
+                                    Supprimer
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteMessage(message.id)}
+                                  onClick={() => {
+                                    if (pinnedMessageId === message.id) {
+                                      void unpinMessage();
+                                    } else {
+                                      void handlePinMessage(message.id);
+                                    }
+                                  }}
                                   style={{
                                     display: "flex",
                                     alignItems: "center",
                                     gap: 8,
                                     background: "transparent",
                                     border: "none",
-                                    color: "#dc2626",
+                                    color: palette.text,
                                     padding: "8px 10px",
                                     borderRadius: 8,
                                     textAlign: "left",
                                     cursor: "pointer",
                                   }}
                                 >
-                                  <Trash2 size={14} />
-                                  Supprimer
+                                  {pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
+                                  {pinnedMessageId === message.id ? "Désépingler" : "Épingler"}
                                 </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (pinnedMessageId === message.id) {
-                                    void unpinMessage();
-                                  } else {
-                                    void handlePinMessage(message.id);
-                                  }
-                                }}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 8,
-                                  background: "transparent",
-                                  border: "none",
-                                  color: palette.text,
-                                  padding: "8px 10px",
-                                  borderRadius: 8,
-                                  textAlign: "left",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                {pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
-                                {pinnedMessageId === message.id ? "Désépingler" : "Épingler"}
-                              </button>
-                            </div>
-                          ) : null}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
 
-                      {Object.keys(reactionCounts).length > 0 ? (
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 6,
-                            justifyContent: isMine ? "flex-end" : "flex-start",
-                            flexWrap: "wrap",
-                            maxWidth: "100%",
-                          }}
-                        >
-                          {Object.entries(reactionCounts).map(([emoji, count]) => {
-                            const isSelectedByCurrentUser = myReaction === emoji;
-                            return (
-                              <button
-                                key={emoji}
-                                type="button"
-                                onClick={() => void toggleMessageReaction(message.id, emoji)}
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 4,
-                                  borderRadius: 999,
-                                  border: `1px solid ${isSelectedByCurrentUser ? "rgba(79,124,255,0.5)" : palette.border}`,
-                                  background: isSelectedByCurrentUser
-                                    ? "rgba(79,124,255,0.12)"
-                                    : theme === "dark"
-                                      ? "rgba(15,23,42,0.8)"
-                                      : "rgba(255,255,255,0.9)",
-                                  color: palette.text,
-                                  padding: "4px 8px",
-                                  fontSize: 12,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                <span>{emoji}</span>
-                                <span>{count}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : null}
+                        {Object.keys(reactionCounts).length > 0 ? (
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 6,
+                              justifyContent: isMine ? "flex-end" : "flex-start",
+                              flexWrap: "wrap",
+                              maxWidth: "100%",
+                            }}
+                          >
+                            {Object.entries(reactionCounts).map(([emoji, count]) => {
+                              const isSelectedByCurrentUser = myReaction === emoji;
+                              return (
+                                <button
+                                  key={emoji}
+                                  type="button"
+                                  onClick={() => void toggleMessageReaction(message.id, emoji)}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 4,
+                                    borderRadius: 999,
+                                    border: `1px solid ${isSelectedByCurrentUser ? "rgba(79,124,255,0.5)" : palette.border}`,
+                                    background: isSelectedByCurrentUser
+                                      ? "rgba(79,124,255,0.12)"
+                                      : theme === "dark"
+                                        ? "rgba(15,23,42,0.8)"
+                                        : "rgba(255,255,255,0.9)",
+                                    color: palette.text,
+                                    padding: "4px 8px",
+                                    fontSize: 12,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <span>{emoji}</span>
+                                  <span>{count}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </section>
+                );
+              })}
+            </section>
 
-          {replyMessage || editingMessageId ? (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8,
-                borderTop: "1px solid rgba(148,163,184,0.12)",
-                padding: "12px 18px 0",
-              }}
-            >
+            {replyMessage || editingMessageId ? (
               <div
                 style={{
-                  background: "#f8fafc",
-                  border: "1px solid rgba(148,163,184,0.14)",
-                  borderRadius: 12,
-                  padding: "8px 10px",
-                  color: "#334155",
-                  fontSize: 12,
-                  maxWidth: "80%",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  borderTop: "1px solid rgba(148,163,184,0.12)",
+                  padding: "12px 18px 0",
                 }}
               >
-                {editingMessageId ? "Modification du message" : `Réponse à ${replyMessage ? getQuotedText(replyMessage) : "message"}`}
+                <div
+                  style={{
+                    background: "#f8fafc",
+                    border: "1px solid rgba(148,163,184,0.14)",
+                    borderRadius: 12,
+                    padding: "8px 10px",
+                    color: "#334155",
+                    fontSize: 12,
+                    maxWidth: "80%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {editingMessageId ? "Modification du message" : `Réponse à ${replyMessage ? getQuotedText(replyMessage) : "message"}`}
+                </div>
+                <button
+                  type="button"
+                  onClick={resetComposer}
+                  style={{
+                    display: "grid",
+                    placeItems: "center",
+                    width: 28,
+                    height: 28,
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.14)",
+                    background: "transparent",
+                    color: "#334155",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={14} />
+                </button>
               </div>
+            ) : null}
+
+            {previewUrl || selectedFile ? (
+              <div style={{ padding: "0 18px 12px" }}>
+                <div
+                  style={{
+                    border: "1px solid rgba(148,163,184,0.18)",
+                    borderRadius: 16,
+                    background: "#ffffff",
+                    padding: 12,
+                    display: "grid",
+                    gap: 8,
+                    boxShadow: "0 8px 22px rgba(15, 23, 42, 0.04)",
+                  }}
+                >
+                  {previewUrl ? (
+                    selectedFile?.type.startsWith("image/") ? (
+                      <img src={previewUrl} alt="Aperçu" style={{ maxHeight: 180, objectFit: "cover", borderRadius: 10, width: "100%" }} />
+                    ) : selectedFile?.type.startsWith("video/") ? (
+                      <video src={previewUrl} controls style={{ maxHeight: 180, borderRadius: 10, width: "100%" }} />
+                    ) : null
+                  ) : null}
+                  <div style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>{selectedFile?.name || "Pièce jointe"}</div>
+                </div>
+              </div>
+            ) : null}
+
+            {uploading ? (
+              <div style={{ padding: "0 18px 12px" }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>
+                    Téléversement Cloudinary… {uploadProgress}%
+                  </div>
+                  <div style={{ height: 8, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
+                    <div
+                      style={{
+                        width: `${uploadProgress}%`,
+                        height: "100%",
+                        background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <footer
+            style={{
+              position: "sticky",
+              bottom: 0,
+              zIndex: 10,
+              background: palette.composerBg,
+              backdropFilter: "blur(12px)",
+              borderTop: `1px solid ${palette.border}`,
+              padding: "14px 16px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Ajouter une pièce jointe"
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                width: 38,
+                height: 38,
+                border: "none",
+                borderRadius: "50%",
+                background: theme === "dark" ? "rgba(139, 92, 246, 0.18)" : "#ede9fe",
+                color: palette.accent,
+                display: "grid",
+                placeItems: "center",
+                cursor: "pointer",
+                boxShadow: "inset 0 0 0 1px rgba(139,92,246,0.15)",
+              }}
+            >
+              <Plus size={18} />
+            </button>
+
+            <div style={{ position: "relative" }}>
               <button
                 type="button"
-                onClick={resetComposer}
+                aria-label="Emoji"
+                onClick={() => setEmojiPickerOpen((current) => !current)}
                 style={{
+                  width: 38,
+                  height: 38,
+                  border: "1px solid rgba(148,163,184,0.18)",
+                  borderRadius: 12,
+                  background: theme === "dark" ? "#0f172a" : "#f8fafc",
+                  color: palette.text,
                   display: "grid",
                   placeItems: "center",
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                  border: "1px solid rgba(148,163,184,0.14)",
-                  background: "transparent",
-                  color: "#334155",
                   cursor: "pointer",
                 }}
               >
-                <X size={14} />
+                <Smile size={18} />
               </button>
-            </div>
-          ) : null}
 
-          {previewUrl || selectedFile ? (
-            <div style={{ padding: "0 18px 12px" }}>
-              <div
-                style={{
-                  border: "1px solid rgba(148,163,184,0.18)",
-                  borderRadius: 16,
-                  background: "#ffffff",
-                  padding: 12,
-                  display: "grid",
-                  gap: 8,
-                  boxShadow: "0 8px 22px rgba(15, 23, 42, 0.04)",
-                }}
-              >
-                {previewUrl ? (
-                  selectedFile?.type.startsWith("image/") ? (
-                    <img src={previewUrl} alt="Aperçu" style={{ maxHeight: 180, objectFit: "cover", borderRadius: 10, width: "100%" }} />
-                  ) : selectedFile?.type.startsWith("video/") ? (
-                    <video src={previewUrl} controls style={{ maxHeight: 180, borderRadius: 10, width: "100%" }} />
-                  ) : null
-                ) : null}
-                <div style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>{selectedFile?.name || "Pièce jointe"}</div>
-              </div>
-            </div>
-          ) : null}
-
-          {uploading ? (
-            <div style={{ padding: "0 18px 12px" }}>
-              <div style={{ display: "grid", gap: 8 }}>
-                <div style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>
-                  Téléversement Cloudinary… {uploadProgress}%
-                </div>
-                <div style={{ height: 8, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
-                  <div
-                    style={{
-                      width: `${uploadProgress}%`,
-                      height: "100%",
-                      background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
-                    }}
+              {emojiPickerOpen ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: 54,
+                    left: 0,
+                    zIndex: 40,
+                    background: palette.floating,
+                    border: `1px solid ${palette.border}`,
+                    borderRadius: 18,
+                    boxShadow: "0 24px 52px rgba(15, 23, 42, 0.12)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <Picker
+                    onEmojiClick={handleEmojiSelect}
+                    autoFocusSearch={false}
+                    searchPlaceHolder="Rechercher"
+                    skinTonesDisabled
+                    width={320}
+                    height={360}
+                    previewConfig={{ showPreview: false }}
                   />
                 </div>
-              </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
 
-        <footer
-          style={{
-            position: "sticky",
-            bottom: 0,
-            zIndex: 10,
-            background: palette.composerBg,
-            backdropFilter: "blur(12px)",
-            borderTop: `1px solid ${palette.border}`,
-            padding: "14px 16px",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <button
-            type="button"
-            aria-label="Ajouter une pièce jointe"
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              width: 38,
-              height: 38,
-              border: "none",
-              borderRadius: "50%",
-              background: theme === "dark" ? "rgba(139, 92, 246, 0.18)" : "#ede9fe",
-              color: palette.accent,
-              display: "grid",
-              placeItems: "center",
-              cursor: "pointer",
-              boxShadow: "inset 0 0 0 1px rgba(139,92,246,0.15)",
-            }}
-          >
-            <Plus size={18} />
-          </button>
-
-          <div style={{ position: "relative" }}>
             <button
               type="button"
-              aria-label="Emoji"
-              onClick={() => setEmojiPickerOpen((current) => !current)}
+              onClick={() => fileInputRef.current?.click()}
               style={{
                 width: 38,
                 height: 38,
@@ -1457,212 +2022,167 @@ export default function ChatPage() {
                 cursor: "pointer",
               }}
             >
-              <Smile size={18} />
+              <Paperclip size={18} />
             </button>
 
-            {emojiPickerOpen ? (
-              <div
-                style={{
-                  position: "absolute",
-                  bottom: 54,
-                  left: 0,
-                  zIndex: 40,
-                  background: palette.floating,
-                  border: `1px solid ${palette.border}`,
-                  borderRadius: 18,
-                  boxShadow: "0 24px 52px rgba(15, 23, 42, 0.12)",
-                  overflow: "hidden",
-                }}
-              >
-                <Picker
-                  onEmojiClick={handleEmojiSelect}
-                  autoFocusSearch={false}
-                  searchPlaceHolder="Rechercher"
-                  skinTonesDisabled
-                  width={320}
-                  height={360}
-                  previewConfig={{ showPreview: false }}
-                />
-              </div>
-            ) : null}
-          </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*,.pdf,.doc,.docx,.txt"
+              onChange={handleFileSelection}
+              style={{ display: "none" }}
+            />
 
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              width: 38,
-              height: 38,
-              border: "1px solid rgba(148,163,184,0.18)",
-              borderRadius: 12,
-              background: theme === "dark" ? "#0f172a" : "#f8fafc",
-              color: palette.text,
-              display: "grid",
-              placeItems: "center",
-              cursor: "pointer",
-            }}
-          >
-            <Paperclip size={18} />
-          </button>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,video/*,.pdf,.doc,.docx,.txt"
-            onChange={handleFileSelection}
-            style={{ display: "none" }}
-          />
-
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void sendMessage();
-              }
-            }}
-            placeholder={editingMessageId ? "Modifier le message..." : "Écrire un message..."}
-            disabled={isComposerDisabled}
-            style={{
-              flex: 1,
-              border: `1px solid ${palette.border}`,
-              borderRadius: 18,
-              background: theme === "dark" ? "#0b1220" : "#f8fafc",
-              color: palette.text,
-              padding: "12px 14px",
-              fontSize: 15,
-              outline: "none",
-              opacity: isComposerDisabled ? 0.7 : 1,
-            }}
-          />
-
-          <button
-            type="button"
-            aria-label="Basculer le thème"
-            onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
-            style={{
-              width: 38,
-              height: 38,
-              border: `1px solid ${palette.border}`,
-              borderRadius: 12,
-              background: theme === "dark" ? "#0b1220" : "#f8fafc",
-              color: palette.text,
-              display: "grid",
-              placeItems: "center",
-              cursor: "pointer",
-            }}
-          >
-            {theme === "dark" ? <SunMedium size={16} /> : <Moon size={16} />}
-          </button>
-
-          {isRecording ? (
-            <div
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void sendMessage();
+                }
+              }}
+              placeholder={editingMessageId ? "Modifier le message..." : "Écrire un message..."}
+              disabled={isComposerDisabled}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 12px",
-                borderRadius: 999,
-                background: theme === "dark" ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.08)",
-                border: "1px solid rgba(239, 68, 68, 0.3)",
-                color: "#ef4444",
-                fontSize: 12,
-                fontWeight: 700,
+                flex: 1,
+                border: `1px solid ${palette.border}`,
+                borderRadius: 18,
+                background: theme === "dark" ? "#0b1220" : "#f8fafc",
+                color: palette.text,
+                padding: "12px 14px",
+                fontSize: 15,
+                outline: "none",
+                opacity: isComposerDisabled ? 0.7 : 1,
+              }}
+            />
+
+            <button
+              type="button"
+              aria-label="Basculer le thème"
+              onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+              style={{
+                width: 38,
+                height: 38,
+                border: `1px solid ${palette.border}`,
+                borderRadius: 12,
+                background: theme === "dark" ? "#0b1220" : "#f8fafc",
+                color: palette.text,
+                display: "grid",
+                placeItems: "center",
+                cursor: "pointer",
               }}
             >
-              <span
+              {theme === "dark" ? <SunMedium size={16} /> : <Moon size={16} />}
+            </button>
+
+            {isRecording ? (
+              <div
                 style={{
-                  width: 10,
-                  height: 10,
-                  display: "inline-block",
-                  borderRadius: "50%",
-                  background: "#ef4444",
-                  boxShadow: "0 0 0 6px rgba(239, 68, 68, 0.18)",
-                  animation: "pulse 1s infinite",
-                }}
-              />
-              <span>{formatDuration(recordingSeconds)}</span>
-              <button
-                type="button"
-                onClick={cancelRecording}
-                style={{
-                  border: "none",
-                  background: "transparent",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 12px",
+                  borderRadius: 999,
+                  background: theme === "dark" ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.08)",
+                  border: "1px solid rgba(239, 68, 68, 0.3)",
                   color: "#ef4444",
-                  cursor: "pointer",
+                  fontSize: 12,
                   fontWeight: 700,
                 }}
               >
-                Annuler
-              </button>
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    display: "inline-block",
+                    borderRadius: "50%",
+                    background: "#ef4444",
+                    boxShadow: "0 0 0 6px rgba(239, 68, 68, 0.18)",
+                    animation: "pulse 1s infinite",
+                  }}
+                />
+                <span>{formatDuration(recordingSeconds)}</span>
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#ef4444",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={stopRecording}
+                  style={{
+                    display: "grid",
+                    placeItems: "center",
+                    width: 22,
+                    height: 22,
+                    borderRadius: 999,
+                    border: "none",
+                    background: "#ef4444",
+                    color: "#ffffff",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Square size={10} fill="currentColor" />
+                </button>
+              </div>
+            ) : null}
+
+            {!draft.trim() && !selectedFile ? (
               <button
                 type="button"
-                onClick={stopRecording}
+                aria-label="Enregistrer un message vocal"
+                onClick={() => void startVoiceRecording()}
+                disabled={isComposerDisabled}
                 style={{
+                  width: 42,
+                  height: 42,
+                  border: "none",
+                  borderRadius: "50%",
+                  background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+                  color: "#ffffff",
                   display: "grid",
                   placeItems: "center",
-                  width: 22,
-                  height: 22,
-                  borderRadius: 999,
-                  border: "none",
-                  background: "#ef4444",
-                  color: "#ffffff",
-                  cursor: "pointer",
+                  boxShadow: "0 14px 28px rgba(34, 197, 94, 0.2)",
+                  cursor: isComposerDisabled ? "not-allowed" : "pointer",
+                  opacity: isComposerDisabled ? 0.7 : 1,
                 }}
               >
-                <Square size={10} fill="currentColor" />
+                <Mic size={18} />
               </button>
-            </div>
-          ) : null}
+            ) : null}
 
-          {!draft.trim() && !selectedFile ? (
             <button
               type="button"
-              aria-label="Enregistrer un message vocal"
-              onClick={() => void startVoiceRecording()}
+              onClick={() => void sendMessage()}
               disabled={isComposerDisabled}
               style={{
                 width: 42,
                 height: 42,
                 border: "none",
                 borderRadius: "50%",
-                background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+                background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
                 color: "#ffffff",
                 display: "grid",
                 placeItems: "center",
-                boxShadow: "0 14px 28px rgba(34, 197, 94, 0.2)",
+                boxShadow: "0 14px 28px rgba(79, 124, 255, 0.22)",
                 cursor: isComposerDisabled ? "not-allowed" : "pointer",
                 opacity: isComposerDisabled ? 0.7 : 1,
               }}
             >
-              <Mic size={18} />
+              <SendHorizontal size={18} />
             </button>
-          ) : null}
-
-          <button
-            type="button"
-            onClick={() => void sendMessage()}
-            disabled={isComposerDisabled}
-            style={{
-              width: 42,
-              height: 42,
-              border: "none",
-              borderRadius: "50%",
-              background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
-              color: "#ffffff",
-              display: "grid",
-              placeItems: "center",
-              boxShadow: "0 14px 28px rgba(79, 124, 255, 0.22)",
-              cursor: isComposerDisabled ? "not-allowed" : "pointer",
-              opacity: isComposerDisabled ? 0.7 : 1,
-            }}
-          >
-            <SendHorizontal size={18} />
-          </button>
-        </footer>
+          </footer>
+        </div>
       </div>
-
     </main>
   );
 }
