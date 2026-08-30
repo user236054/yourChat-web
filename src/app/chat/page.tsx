@@ -2,16 +2,24 @@
 
 import { onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
 import {
+  Check,
   CheckCheck,
   LogOut,
   MessageSquareReply,
+  Moon,
   MoreHorizontal,
+  MoreVertical,
   Paperclip,
+  Phone,
   Pin,
+  Plus,
+  Search,
   SendHorizontal,
   Smile,
+  SunMedium,
   Trash2,
   Pencil,
+  Video,
   X,
   PinOff,
 } from "lucide-react";
@@ -65,10 +73,25 @@ export default function ChatPage() {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
     setNotificationPermission(getNotificationPermissionState());
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedTheme = window.localStorage.getItem("messagerie-prive-theme");
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("messagerie-prive-theme", theme);
+    }
+  }, [theme]);
 
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) {
@@ -179,6 +202,47 @@ export default function ChatPage() {
   const messageById = Object.fromEntries(messages.map((message) => [message.id, message]));
   const pinnedMessage = pinnedMessageId ? messageById[pinnedMessageId] : null;
   const replyMessage = replyToMessageId ? messageById[replyToMessageId] : null;
+  const palette = theme === "dark"
+    ? {
+        pageBg: "#0f172a",
+        panelBg: "rgba(15, 23, 42, 0.92)",
+        appBg: "#111827",
+        headerBg: "rgba(17, 24, 39, 0.9)",
+        surface: "#1f2937",
+        surfaceSoft: "#111827",
+        surfaceAlt: "#0b1220",
+        border: "rgba(148, 163, 184, 0.18)",
+        text: "#e5eefb",
+        textMuted: "#94a3b8",
+        messageIncoming: "#1f2937",
+        messageOutgoing: "linear-gradient(135deg, #4f46e5 0%, #8b5cf6 100%)",
+        composerBg: "#111827",
+        inputBg: "#0b1220",
+        accent: "#8b5cf6",
+        accentSoft: "#312e81",
+        bubbleShadow: "0 8px 18px rgba(15, 23, 42, 0.28)",
+        floating: "rgba(17, 24, 39, 0.95)",
+      }
+    : {
+        pageBg: "linear-gradient(180deg, #f5f7fb 0%, #eef3fb 100%)",
+        panelBg: "rgba(255,255,255,0.92)",
+        appBg: "#f3f4f6",
+        headerBg: "rgba(255,255,255,0.88)",
+        surface: "#ffffff",
+        surfaceSoft: "#f8fafc",
+        surfaceAlt: "#eef2ff",
+        border: "rgba(148, 163, 184, 0.18)",
+        text: "#0f172a",
+        textMuted: "#64748b",
+        messageIncoming: "#ffffff",
+        messageOutgoing: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+        composerBg: "rgba(255,255,255,0.96)",
+        inputBg: "#f8fafc",
+        accent: "#6d5efc",
+        accentSoft: "#ede9fe",
+        bubbleShadow: "0 8px 22px rgba(15, 23, 42, 0.06)",
+        floating: "rgba(255,255,255,0.96)",
+      };
 
   const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -424,28 +488,42 @@ export default function ChatPage() {
     return message.text || "Pièce jointe";
   };
 
+  const headerActionStyle: React.CSSProperties = {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    border: `1px solid ${palette.border}`,
+    background: theme === "dark" ? "rgba(15, 23, 42, 0.9)" : "#f8fafc",
+    display: "grid",
+    placeItems: "center",
+    cursor: "pointer",
+    opacity: 0.9,
+  };
+
   return (
     <main
       style={{
+        width: "100vw",
+        height: "100dvh",
         minHeight: "100vh",
-        background: "linear-gradient(180deg, #f5f7fb 0%, #eef3fb 100%)",
-        padding: "22px 16px",
+        background: palette.pageBg,
+        padding: 0,
+        margin: 0,
+        overflow: "hidden",
       }}
     >
       <div
         style={{
-          maxWidth: 980,
           width: "100%",
-          margin: "0 auto",
-          background: "rgba(255,255,255,0.9)",
-          border: "1px solid rgba(148,163,184,0.18)",
-          borderRadius: 28,
-          boxShadow: "0 18px 45px rgba(15, 23, 42, 0.08)",
+          height: "100%",
+          background: palette.panelBg,
+          border: "none",
+          borderRadius: 0,
+          boxShadow: "none",
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
-          height: "calc(100vh - 44px)",
-          minHeight: 620,
+          minHeight: "100dvh",
         }}
       >
         <header
@@ -453,62 +531,76 @@ export default function ChatPage() {
             position: "sticky",
             top: 0,
             zIndex: 10,
-            padding: "18px 20px",
-            borderBottom: "1px solid rgba(148,163,184,0.14)",
-            background: "rgba(255,255,255,0.95)",
+            padding: "16px 18px",
+            borderBottom: `1px solid ${palette.border}`,
+            background: palette.headerBg,
             backdropFilter: "blur(12px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
             gap: 12,
+            color: palette.text,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
             <div
               style={{
-                width: 12,
-                height: 12,
+                width: 42,
+                height: 42,
                 borderRadius: "50%",
                 background: partner.accent,
-                boxShadow: `0 0 18px ${partner.accent}`,
+                display: "grid",
+                placeItems: "center",
+                color: "#ffffff",
+                fontWeight: 700,
+                fontSize: 16,
                 flexShrink: 0,
+                position: "relative",
+                boxShadow: `0 10px 24px ${partner.accent}55`,
               }}
-            />
+            >
+              {partner.name.charAt(0).toUpperCase()}
+              <span
+                style={{
+                  position: "absolute",
+                  right: 1,
+                  bottom: 1,
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: partnerOnline ? "#22c55e" : "#94a3b8",
+                  border: `2px solid ${theme === "dark" ? "#0f172a" : "#ffffff"}`,
+                  boxShadow: "0 0 0 3px rgba(34, 197, 94, 0.16)",
+                }}
+              />
+            </div>
             <div style={{ minWidth: 0 }}>
-              <div style={{ color: "#0f172a", fontWeight: 700, fontSize: 16 }}>{partner.name}</div>
-              <div style={{ color: "#64748b", fontSize: 12, marginTop: 2 }}>
+              <div style={{ color: palette.text, fontWeight: 700, fontSize: 16 }}>{partner.name}</div>
+              <div style={{ color: palette.textMuted, fontSize: 12, marginTop: 2 }}>
                 {partnerTyping ? "Écrit..." : partnerOnline ? "En ligne" : "Hors ligne"}
               </div>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              clearStoredUser();
-              if (isFirebaseConfigured && auth) {
-                void firebaseSignOut(auth).then(() => router.push("/login"));
-                return;
-              }
-              router.push("/login");
-            }}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              border: "1px solid rgba(148,163,184,0.2)",
-              borderRadius: 12,
-              background: "#f8fafc",
-              color: "#0f172a",
-              padding: "9px 12px",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            <LogOut size={16} />
-            Déconnexion
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button type="button" aria-label="Recherche" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+              <Search size={16} />
+            </button>
+            <button type="button" aria-label="Appel audio" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+              <Phone size={16} />
+            </button>
+            <button type="button" aria-label="Appel vidéo" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+              <Video size={16} />
+            </button>
+            <button
+              type="button"
+              aria-label="Menu du contact"
+              onClick={() => setMenuOpenId((current) => (current === "header" ? null : "header"))}
+              style={{ ...headerActionStyle, color: palette.textMuted }}
+            >
+              <MoreVertical size={16} />
+            </button>
+          </div>
         </header>
 
         {pinnedMessage ? (
@@ -558,7 +650,7 @@ export default function ChatPage() {
               padding: "22px 18px",
               display: "grid",
               gap: 14,
-              background: "linear-gradient(180deg, #f8fafc 0%, #f4f7fb 100%)",
+              background: palette.pageBg,
             }}
           >
             {messages.length === 0 && !loadingAuth ? (
@@ -566,19 +658,20 @@ export default function ChatPage() {
                 style={{
                   placeSelf: "center",
                   textAlign: "center",
-                  color: "#64748b",
+                  color: palette.textMuted,
                   maxWidth: 360,
                   padding: "28px 18px",
                   borderRadius: 18,
-                  background: "rgba(255,255,255,0.7)",
-                  border: "1px solid rgba(148,163,184,0.12)",
+                  background: palette.surface,
+                  border: `1px solid ${palette.border}`,
+                  boxShadow: palette.bubbleShadow,
                 }}
               >
                 Aucun message pour le moment. Commencez la conversation.
               </div>
             ) : null}
 
-            {messages.map((message) => {
+            {messages.map((message, index) => {
               const isMine = message.sender === activeUser;
               const isDeleted = Boolean(message.isDeleted);
               const canManageOwnMessage = Boolean(
@@ -587,250 +680,290 @@ export default function ChatPage() {
               );
               const referenceMessage = message.replyTo ? messageById[message.replyTo] : null;
               const bubbleText = isDeleted ? "Ce message a été supprimé" : message.text || "";
+              const previousMessage = index > 0 ? messages[index - 1] : null;
+              const showDateSeparator = !previousMessage || new Date(previousMessage.createdAt).toDateString() !== new Date(message.createdAt).toDateString();
+              const readableTime = new Date(message.createdAt).toLocaleTimeString("fr-FR", {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
 
               return (
-                <div
-                  key={message.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: isMine ? "flex-end" : "flex-start",
-                  }}
-                >
-                  <div
-                    ref={(node) => {
-                      if (node) {
-                        messageRefs.current[message.id] = node;
-                      }
-                    }}
-                    style={{
-                      maxWidth: "75%",
-                      display: "grid",
-                      gap: 8,
-                    }}
-                  >
-                    {referenceMessage ? (
-                      <button
-                        type="button"
-                        onClick={() => handleScrollToMessage(referenceMessage.id || "")}
-                        style={{
-                          textAlign: "left",
-                          alignSelf: isMine ? "flex-end" : "flex-start",
-                          maxWidth: "90%",
-                          border: "1px solid rgba(148,163,184,0.16)",
-                          borderRadius: 12,
-                          padding: "8px 10px",
-                          background: "rgba(255,255,255,0.75)",
-                          color: "#334155",
-                          fontSize: 12,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>
-                          Réponse à {referenceMessage.sender === activeUser ? "vous" : partner.name}
-                        </div>
-                        <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {getQuotedText(referenceMessage)}
-                        </div>
-                      </button>
-                    ) : null}
-
-                    <div style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div key={message.id} style={{ display: "grid", gap: 10 }}>
+                  {showDateSeparator ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        width: "100%",
+                      }}
+                    >
                       <div
                         style={{
-                          flex: 1,
-                          background: isDeleted
-                            ? "#f8fafc"
-                            : isMine
-                              ? "linear-gradient(135deg, #eaf1ff 0%, #dfe9ff 100%)"
-                              : "#ffffff",
-                          color: isDeleted ? "#64748b" : "#0f172a",
-                          borderRadius: 18,
-                          padding: "12px 14px",
-                          boxShadow: "0 8px 22px rgba(15, 23, 42, 0.06)",
-                          border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : isMine ? "1px solid rgba(79, 124, 255, 0.14)" : "1px solid rgba(148,163,184,0.12)",
-                          opacity: isDeleted ? 0.8 : 1,
-                          minWidth: 0,
+                          background: theme === "dark" ? "rgba(148,163,184,0.12)" : "rgba(148,163,184,0.08)",
+                          color: palette.textMuted,
+                          borderRadius: 999,
+                          padding: "6px 12px",
+                          fontSize: 11,
+                          letterSpacing: "0.04em",
+                          textTransform: "uppercase",
+                          border: `1px solid ${palette.border}`,
                         }}
                       >
-                        {message.mediaUrl && !isDeleted ? (
-                          message.mediaType === "image" ? (
-                            <img
-                              src={message.mediaUrl}
-                              alt={message.fileName || "Image envoyée"}
-                              style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                            />
-                          ) : message.mediaType === "video" ? (
-                            <video
-                              src={message.mediaUrl}
-                              controls
-                              style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                            />
-                          ) : (
-                            <a
-                              href={message.mediaUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                color: "#3453d1",
-                                textDecoration: "underline",
-                                display: "block",
-                                marginBottom: 8,
-                                wordBreak: "break-all",
-                              }}
-                            >
-                              {message.fileName || "Fichier joint"}
-                            </a>
-                          )
-                        ) : null}
-
-                        {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
-
-                        <div
-                          style={{
-                            marginTop: 8,
-                            fontSize: 11,
-                            color: isDeleted ? "#94a3b8" : isMine ? "#4761bf" : "#64748b",
-                            display: "flex",
-                            justifyContent: "flex-end",
-                            alignItems: "center",
-                            gap: 6,
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <span>{isMine ? `envoyé · ${message.status}` : "reçu"}</span>
-                          {message.editedAt ? <span style={{ color: "#64748b" }}>modifié</span> : null}
-                          {isMine ? <CheckCheck size={14} /> : null}
-                        </div>
+                        {new Date(message.createdAt).toLocaleDateString("fr-FR", {
+                          weekday: "long",
+                          day: "numeric",
+                          month: "long",
+                        })}
                       </div>
+                    </div>
+                  ) : null}
 
-                      <div style={{ position: "relative" }} onClick={(event) => event.stopPropagation()}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: isMine ? "flex-end" : "flex-start",
+                    }}
+                  >
+                    <div
+                      ref={(node) => {
+                        if (node) {
+                          messageRefs.current[message.id] = node;
+                        }
+                      }}
+                      style={{
+                        maxWidth: "76%",
+                        display: "grid",
+                        gap: 8,
+                      }}
+                    >
+                      {referenceMessage ? (
                         <button
                           type="button"
-                          aria-label="Actions du message"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setMenuOpenId((current) => (current === message.id ? null : message.id));
-                          }}
+                          onClick={() => handleScrollToMessage(referenceMessage.id || "")}
                           style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: 999,
-                            border: "1px solid rgba(148,163,184,0.14)",
-                            background: "rgba(255,255,255,0.8)",
-                            color: "#334155",
-                            display: "grid",
-                            placeItems: "center",
+                            textAlign: "left",
+                            alignSelf: isMine ? "flex-end" : "flex-start",
+                            maxWidth: "90%",
+                            border: `1px solid ${palette.border}`,
+                            borderRadius: 12,
+                            padding: "8px 10px",
+                            background: theme === "dark" ? "rgba(15, 23, 42, 0.72)" : "rgba(255,255,255,0.72)",
+                            color: palette.text,
+                            fontSize: 12,
                             cursor: "pointer",
                           }}
                         >
-                          <MoreHorizontal size={14} />
+                          <div style={{ color: palette.textMuted, fontSize: 11, marginBottom: 4 }}>
+                            Réponse à {referenceMessage.sender === activeUser ? "vous" : partner.name}
+                          </div>
+                          <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {getQuotedText(referenceMessage)}
+                          </div>
                         </button>
+                      ) : null}
 
-                        {menuOpenId === message.id ? (
+                      <div style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        <div
+                          style={{
+                            flex: 1,
+                            background: isDeleted
+                              ? theme === "dark" ? "rgba(148, 163, 184, 0.1)" : "#f8fafc"
+                              : isMine
+                                ? palette.messageOutgoing
+                                : palette.messageIncoming,
+                            color: isDeleted ? palette.textMuted : isMine ? "#ffffff" : palette.text,
+                            borderRadius: isMine ? "18px 18px 6px 18px" : "18px 18px 18px 6px",
+                            padding: "12px 14px",
+                            boxShadow: palette.bubbleShadow,
+                            border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : "1px solid transparent",
+                            opacity: isDeleted ? 0.8 : 1,
+                            minWidth: 0,
+                            maxWidth: "100%",
+                          }}
+                        >
+                          {message.mediaUrl && !isDeleted ? (
+                            message.mediaType === "image" ? (
+                              <img
+                                src={message.mediaUrl}
+                                alt={message.fileName || "Image envoyée"}
+                                style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                              />
+                            ) : message.mediaType === "video" ? (
+                              <video
+                                src={message.mediaUrl}
+                                controls
+                                style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                              />
+                            ) : (
+                              <a
+                                href={message.mediaUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  color: isMine ? "#ffffff" : "#3453d1",
+                                  textDecoration: "underline",
+                                  display: "block",
+                                  marginBottom: 8,
+                                  wordBreak: "break-all",
+                                }}
+                              >
+                                {message.fileName || "Fichier joint"}
+                              </a>
+                            )
+                          ) : null}
+
+                          {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
+
                           <div
                             style={{
-                              position: "absolute",
-                              right: 0,
-                              top: 36,
-                              zIndex: 20,
-                              minWidth: 180,
-                              background: "#ffffff",
-                              border: "1px solid rgba(148,163,184,0.18)",
-                              borderRadius: 14,
-                              boxShadow: "0 18px 44px rgba(15, 23, 42, 0.08)",
-                              padding: 8,
-                              display: "grid",
-                              gap: 4,
+                              marginTop: 8,
+                              fontSize: 11,
+                              color: isDeleted ? palette.textMuted : isMine ? "rgba(255,255,255,0.8)" : palette.textMuted,
+                              display: "flex",
+                              justifyContent: "flex-end",
+                              alignItems: "center",
+                              gap: 6,
+                              flexWrap: "wrap",
                             }}
                           >
-                            <button
-                              type="button"
-                              onClick={() => beginReplyMessage(message.id)}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 8,
-                                background: "transparent",
-                                border: "none",
-                                color: "#0f172a",
-                                padding: "8px 10px",
-                                borderRadius: 8,
-                                textAlign: "left",
-                                cursor: "pointer",
-                              }}
-                            >
-                              <MessageSquareReply size={14} />
-                              Répondre
-                            </button>
-                            {!isDeleted && canManageOwnMessage ? (
-                              <button
-                                type="button"
-                                onClick={() => beginEditMessage(message)}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 8,
-                                  background: "transparent",
-                                  border: "none",
-                                  color: "#0f172a",
-                                  padding: "8px 10px",
-                                  borderRadius: 8,
-                                  textAlign: "left",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                <Pencil size={14} />
-                                Modifier
-                              </button>
+                            <span>{readableTime}</span>
+                            {message.editedAt ? <span>• modifié</span> : null}
+                            {isMine ? (
+                              message.status === "read" ? <CheckCheck size={12} /> : <Check size={12} />
                             ) : null}
-                            {!isDeleted && canManageOwnMessage ? (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteMessage(message.id)}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 8,
-                                  background: "transparent",
-                                  border: "none",
-                                  color: "#dc2626",
-                                  padding: "8px 10px",
-                                  borderRadius: 8,
-                                  textAlign: "left",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                <Trash2 size={14} />
-                                Supprimer
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (pinnedMessageId === message.id) {
-                                  void unpinMessage();
-                                } else {
-                                  void handlePinMessage(message.id);
-                                }
-                              }}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 8,
-                                background: "transparent",
-                                border: "none",
-                                color: "#0f172a",
-                                padding: "8px 10px",
-                                borderRadius: 8,
-                                textAlign: "left",
-                                cursor: "pointer",
-                              }}
-                            >
-                              {pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
-                              {pinnedMessageId === message.id ? "Désépingler" : "Épingler"}
-                            </button>
                           </div>
-                        ) : null}
+                        </div>
+
+                        <div style={{ position: "relative" }} onClick={(event) => event.stopPropagation()}>
+                          <button
+                            type="button"
+                            aria-label="Actions du message"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setMenuOpenId((current) => (current === message.id ? null : message.id));
+                            }}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 999,
+                              border: `1px solid ${palette.border}`,
+                              background: theme === "dark" ? "rgba(15,23,42,0.9)" : "rgba(255,255,255,0.8)",
+                              color: palette.text,
+                              display: "grid",
+                              placeItems: "center",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <MoreHorizontal size={14} />
+                          </button>
+
+                          {menuOpenId === message.id ? (
+                            <div
+                              style={{
+                                position: "absolute",
+                                right: 0,
+                                top: 36,
+                                zIndex: 20,
+                                minWidth: 180,
+                                background: palette.floating,
+                                border: `1px solid ${palette.border}`,
+                                borderRadius: 14,
+                                boxShadow: "0 18px 44px rgba(15, 23, 42, 0.08)",
+                                padding: 8,
+                                display: "grid",
+                                gap: 4,
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => beginReplyMessage(message.id)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  background: "transparent",
+                                  border: "none",
+                                  color: palette.text,
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  textAlign: "left",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <MessageSquareReply size={14} />
+                                Répondre
+                              </button>
+                              {!isDeleted && canManageOwnMessage ? (
+                                <button
+                                  type="button"
+                                  onClick={() => beginEditMessage(message)}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    background: "transparent",
+                                    border: "none",
+                                    color: palette.text,
+                                    padding: "8px 10px",
+                                    borderRadius: 8,
+                                    textAlign: "left",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <Pencil size={14} />
+                                  Modifier
+                                </button>
+                              ) : null}
+                              {!isDeleted && canManageOwnMessage ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMessage(message.id)}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    background: "transparent",
+                                    border: "none",
+                                    color: "#dc2626",
+                                    padding: "8px 10px",
+                                    borderRadius: 8,
+                                    textAlign: "left",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <Trash2 size={14} />
+                                  Supprimer
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (pinnedMessageId === message.id) {
+                                    void unpinMessage();
+                                  } else {
+                                    void handlePinMessage(message.id);
+                                  }
+                                }}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  background: "transparent",
+                                  border: "none",
+                                  color: palette.text,
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  textAlign: "left",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
+                                {pinnedMessageId === message.id ? "Désépingler" : "Épingler"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -936,27 +1069,47 @@ export default function ChatPage() {
             position: "sticky",
             bottom: 0,
             zIndex: 10,
-            background: "rgba(255,255,255,0.96)",
+            background: palette.composerBg,
             backdropFilter: "blur(12px)",
-            borderTop: "1px solid rgba(148,163,184,0.14)",
+            borderTop: `1px solid ${palette.border}`,
             padding: "14px 16px",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
+          <button
+            type="button"
+            aria-label="Ajouter une pièce jointe"
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              width: 38,
+              height: 38,
+              border: "none",
+              borderRadius: "50%",
+              background: theme === "dark" ? "rgba(139, 92, 246, 0.18)" : "#ede9fe",
+              color: palette.accent,
+              display: "grid",
+              placeItems: "center",
+              cursor: "pointer",
+              boxShadow: "inset 0 0 0 1px rgba(139,92,246,0.15)",
+            }}
+          >
+            <Plus size={18} />
+          </button>
+
           <div style={{ position: "relative" }}>
             <button
               type="button"
               aria-label="Emoji"
               onClick={() => setEmojiPickerOpen((current) => !current)}
               style={{
-                width: 42,
-                height: 42,
+                width: 38,
+                height: 38,
                 border: "1px solid rgba(148,163,184,0.18)",
                 borderRadius: 12,
-                background: "#f8fafc",
-                color: "#334155",
+                background: theme === "dark" ? "#0f172a" : "#f8fafc",
+                color: palette.text,
                 display: "grid",
                 placeItems: "center",
                 cursor: "pointer",
@@ -972,8 +1125,8 @@ export default function ChatPage() {
                   bottom: 54,
                   left: 0,
                   zIndex: 40,
-                  background: "#ffffff",
-                  border: "1px solid rgba(148,163,184,0.18)",
+                  background: palette.floating,
+                  border: `1px solid ${palette.border}`,
                   borderRadius: 18,
                   boxShadow: "0 24px 52px rgba(15, 23, 42, 0.12)",
                   overflow: "hidden",
@@ -992,24 +1145,16 @@ export default function ChatPage() {
             ) : null}
           </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,video/*,.pdf,.doc,.docx,.txt"
-            onChange={handleFileSelection}
-            style={{ display: "none" }}
-          />
-
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             style={{
-              width: 42,
-              height: 42,
+              width: 38,
+              height: 38,
               border: "1px solid rgba(148,163,184,0.18)",
               borderRadius: 12,
-              background: "#f8fafc",
-              color: "#334155",
+              background: theme === "dark" ? "#0f172a" : "#f8fafc",
+              color: palette.text,
               display: "grid",
               placeItems: "center",
               cursor: "pointer",
@@ -1017,6 +1162,14 @@ export default function ChatPage() {
           >
             <Paperclip size={18} />
           </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,video/*,.pdf,.doc,.docx,.txt"
+            onChange={handleFileSelection}
+            style={{ display: "none" }}
+          />
 
           <input
             ref={inputRef}
@@ -1031,10 +1184,10 @@ export default function ChatPage() {
             disabled={isComposerDisabled}
             style={{
               flex: 1,
-              border: "1px solid rgba(148,163,184,0.18)",
-              borderRadius: 14,
-              background: "#f8fafc",
-              color: "#0f172a",
+              border: `1px solid ${palette.border}`,
+              borderRadius: 18,
+              background: theme === "dark" ? "#0b1220" : "#f8fafc",
+              color: palette.text,
               padding: "12px 14px",
               fontSize: 15,
               outline: "none",
@@ -1044,13 +1197,32 @@ export default function ChatPage() {
 
           <button
             type="button"
+            aria-label="Basculer le thème"
+            onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+            style={{
+              width: 38,
+              height: 38,
+              border: `1px solid ${palette.border}`,
+              borderRadius: 12,
+              background: theme === "dark" ? "#0b1220" : "#f8fafc",
+              color: palette.text,
+              display: "grid",
+              placeItems: "center",
+              cursor: "pointer",
+            }}
+          >
+            {theme === "dark" ? <SunMedium size={16} /> : <Moon size={16} />}
+          </button>
+
+          <button
+            type="button"
             onClick={() => void sendMessage()}
             disabled={isComposerDisabled}
             style={{
-              width: 46,
-              height: 46,
+              width: 42,
+              height: 42,
               border: "none",
-              borderRadius: 14,
+              borderRadius: "50%",
               background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
               color: "#ffffff",
               display: "grid",
@@ -1065,9 +1237,6 @@ export default function ChatPage() {
         </footer>
       </div>
 
-      <div style={{ marginTop: 14, color: "#64748b", fontSize: 12, textAlign: "center" }}>
-        Utilisateur actif : {userLabel}
-      </div>
     </main>
   );
 }
