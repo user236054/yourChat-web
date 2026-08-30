@@ -51,7 +51,7 @@ import {
   getNotificationPermissionState,
   storeFcmTokenForCurrentUser,
 } from "@/lib/notifications";
-import { uploadToCloudinary } from "@/lib/cloudinary";
+import { isCloudinaryConfigured, uploadToCloudinary } from "@/lib/cloudinary";
 import Picker from "emoji-picker-react";
 
 export default function ChatPage() {
@@ -570,6 +570,11 @@ export default function ChatPage() {
   };
 
   const startVoiceRecording = async () => {
+    if (!isCloudinaryConfigured()) {
+      alert("Cloudinary n’est pas configuré. Ajoutez NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME et NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET pour pouvoir envoyer des messages vocaux.");
+      return;
+    }
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       alert("L’enregistrement audio n’est pas supporté par ce navigateur.");
       return;
@@ -593,13 +598,33 @@ export default function ChatPage() {
       };
 
       recorder.onstop = async () => {
+        console.log("[Voice] recorder stopped");
         const recordedBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        console.log("[Voice] blob ready", {
+          type: recordedBlob.type,
+          size: recordedBlob.size,
+          chunks: chunks.length,
+        });
         stream.getTracks().forEach((track) => track.stop());
+
+        if (!recordedBlob.size) {
+          console.error("[Voice] recorded blob is empty");
+          alert("Le fichier audio enregistré est vide. Réessayez.");
+          setIsRecording(false);
+          return;
+        }
 
         const duration = recordingSecondsRef.current;
         const fileExt = recordedBlob.type.includes("mp4") ? "m4a" : recordedBlob.type.includes("ogg") ? "ogg" : "webm";
         const audioFile = new File([recordedBlob], `voice-note-${Date.now()}.${fileExt}`, {
           type: recordedBlob.type || "audio/webm",
+        });
+
+        console.log("[Voice] File created", {
+          name: audioFile.name,
+          type: audioFile.type,
+          size: audioFile.size,
+          duration,
         });
 
         recordingSecondsRef.current = 0;
@@ -608,17 +633,23 @@ export default function ChatPage() {
         try {
           setUploading(true);
           setUploadProgress(0);
+          console.log("[Voice] starting Cloudinary upload...");
           const cloudResult = await uploadToCloudinary(audioFile, setUploadProgress);
-          await sendMediaMessage({
+          console.log("[Voice] Cloudinary upload success", cloudResult);
+          const finalPayload = {
             text: "",
             mediaUrl: cloudResult.url,
-            mediaType: "audio",
+            mediaType: "audio" as const,
             fileName: cloudResult.fileName,
             audioDuration: duration,
             replyTo: replyToMessageId ?? null,
-          });
+          };
+          console.log("[Voice] sending Firestore audio message", finalPayload);
+          await sendMediaMessage(finalPayload);
+          console.log("[Voice] Firestore send completed");
           resetComposer();
         } catch (error) {
+          console.error("[Voice] send flow failed", error);
           alert(error instanceof Error ? error.message : "L’enregistrement audio n’a pas pu être envoyé.");
         } finally {
           setUploading(false);

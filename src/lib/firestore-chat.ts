@@ -194,7 +194,7 @@ export async function sendMediaMessage(payload: {
   await ensureConversation();
 
   const messageRef = collection(db, "conversations", PRIVATE_CONVERSATION_ID, "messages");
-  await addDoc(messageRef, {
+  const firestorePayload = {
     senderId: auth.currentUser.uid,
     senderEmail: auth.currentUser.email,
     senderName: auth.currentUser.displayName || auth.currentUser.email,
@@ -211,7 +211,11 @@ export async function sendMediaMessage(payload: {
     audioDuration: payload.mediaType === "audio" ? payload.audioDuration ?? null : null,
     reactions: {},
     createdAt: serverTimestamp(),
-  });
+  };
+
+  console.log("[Firestore] sending media message", firestorePayload);
+  const docRef = await addDoc(messageRef, firestorePayload);
+  console.log("[Firestore] media message created", { id: docRef.id, type: firestorePayload.type });
 }
 
 export async function updateMessageText(messageId: string, nextText: string) {
