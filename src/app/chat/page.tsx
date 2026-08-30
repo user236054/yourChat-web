@@ -1,6 +1,15 @@
 "use client";
 
 import { onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
+import {
+  LogOut,
+  Paperclip,
+  SendHorizontal,
+  Smile,
+  Sparkles,
+  CheckCheck,
+  MessageSquareText,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { clearStoredUser, getStoredUser, getUserByEmail, setStoredUser, USERS, type UserKey } from "@/lib/chat-config";
@@ -16,7 +25,11 @@ import {
   type FirestoreMessage,
 } from "@/lib/firestore-chat";
 import { startPresenceTracking, subscribeToUserPresenceByEmail } from "@/lib/presence";
-import { attachForegroundMessageListener, storeFcmTokenForCurrentUser } from "@/lib/notifications";
+import {
+  attachForegroundMessageListener,
+  getNotificationPermissionState,
+  storeFcmTokenForCurrentUser,
+} from "@/lib/notifications";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import Picker from "emoji-picker-react";
 
@@ -28,13 +41,18 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [partnerOnline, setPartnerOnline] = useState(false);
-  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [loadingAuth, setLoadingAuth] = useState<boolean | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setNotificationPermission(getNotificationPermissionState());
+  }, []);
 
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) {
@@ -44,6 +62,8 @@ export default function ChatPage() {
       setLoadingAuth(false);
       return;
     }
+
+    setLoadingAuth(true);
 
     const firebaseAuth = auth;
     const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
@@ -127,6 +147,7 @@ export default function ChatPage() {
   }, [activeUser]);
 
   const partner = activeUser === "me" ? USERS.friend : USERS.me;
+  const isComposerDisabled = loadingAuth !== false || !activeUser || uploading;
 
   const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -282,26 +303,45 @@ export default function ChatPage() {
   };
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 16 }}>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "linear-gradient(180deg, #f5f7fb 0%, #eef3fb 100%)",
+        padding: "22px 16px",
+      }}
+    >
       <div
         style={{
-          border: "1px solid rgba(148,163,184,0.2)",
-          borderRadius: 20,
-          background: "#131b2d",
+          maxWidth: 980,
+          width: "100%",
+          margin: "0 auto",
+          background: "rgba(255,255,255,0.9)",
+          border: "1px solid rgba(148,163,184,0.18)",
+          borderRadius: 28,
+          boxShadow: "0 18px 45px rgba(15, 23, 42, 0.08)",
           overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+          height: "calc(100vh - 44px)",
+          minHeight: 620,
         }}
       >
         <header
           style={{
-            padding: "16px 20px",
-            borderBottom: "1px solid rgba(148,163,184,0.2)",
+            position: "sticky",
+            top: 0,
+            zIndex: 10,
+            padding: "18px 20px",
+            borderBottom: "1px solid rgba(148,163,184,0.14)",
+            background: "rgba(255,255,255,0.95)",
+            backdropFilter: "blur(12px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
             gap: 12,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
             <div
               style={{
                 width: 12,
@@ -309,11 +349,12 @@ export default function ChatPage() {
                 borderRadius: "50%",
                 background: partner.accent,
                 boxShadow: `0 0 18px ${partner.accent}`,
+                flexShrink: 0,
               }}
             />
-            <div>
-              <strong>{partner.name}</strong>
-              <div style={{ color: "#94a3b8", fontSize: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ color: "#0f172a", fontWeight: 700, fontSize: 16 }}>{partner.name}</div>
+              <div style={{ color: "#64748b", fontSize: 12, marginTop: 2 }}>
                 {partnerTyping ? "Écrit..." : partnerOnline ? "En ligne" : "Hors ligne"}
               </div>
             </div>
@@ -330,161 +371,216 @@ export default function ChatPage() {
               router.push("/login");
             }}
             style={{
-              background: "transparent",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
               border: "1px solid rgba(148,163,184,0.2)",
               borderRadius: 12,
-              color: "#edf2ff",
-              padding: "8px 12px",
+              background: "#f8fafc",
+              color: "#0f172a",
+              padding: "9px 12px",
+              fontWeight: 600,
+              cursor: "pointer",
             }}
           >
-            Se déconnecter
+            <LogOut size={16} />
+            Déconnexion
           </button>
         </header>
 
-        <section style={{ minHeight: 440, padding: 16, display: "grid", gap: 12 }}>
-          {messages.length === 0 && !loadingAuth ? (
-            <div style={{ color: "#94a3b8", textAlign: "center", marginTop: 24 }}>
-              Aucun message pour le moment. Commencez la conversation.
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <section
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "22px 18px",
+              display: "grid",
+              gap: 14,
+              background: "linear-gradient(180deg, #f8fafc 0%, #f4f7fb 100%)",
+            }}
+          >
+            {messages.length === 0 && !loadingAuth ? (
+              <div
+                style={{
+                  placeSelf: "center",
+                  textAlign: "center",
+                  color: "#64748b",
+                  maxWidth: 360,
+                  padding: "28px 18px",
+                  borderRadius: 18,
+                  background: "rgba(255,255,255,0.7)",
+                  border: "1px solid rgba(148,163,184,0.12)",
+                }}
+              >
+                Aucun message pour le moment. Commencez la conversation.
+              </div>
+            ) : null}
+
+            {messages.map((message) => {
+              const isMine = message.sender === activeUser;
+
+              return (
+                <div
+                  key={message.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: isMine ? "flex-end" : "flex-start",
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: "75%",
+                      background: isMine ? "linear-gradient(135deg, #eaf1ff 0%, #dfe9ff 100%)" : "#ffffff",
+                      color: "#0f172a",
+                      borderRadius: 18,
+                      padding: "12px 14px",
+                      boxShadow: "0 8px 22px rgba(15, 23, 42, 0.06)",
+                      border: isMine ? "1px solid rgba(79, 124, 255, 0.14)" : "1px solid rgba(148,163,184,0.12)",
+                    }}
+                  >
+                    {message.mediaUrl ? (
+                      message.mediaType === "image" ? (
+                        <img
+                          src={message.mediaUrl}
+                          alt={message.fileName || "Image envoyée"}
+                          style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                        />
+                      ) : message.mediaType === "video" ? (
+                        <video
+                          src={message.mediaUrl}
+                          controls
+                          style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                        />
+                      ) : (
+                        <a
+                          href={message.mediaUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            color: "#3453d1",
+                            textDecoration: "underline",
+                            display: "block",
+                            marginBottom: 8,
+                            wordBreak: "break-all",
+                          }}
+                        >
+                          {message.fileName || "Fichier joint"}
+                        </a>
+                      )
+                    ) : null}
+
+                    {message.text ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{message.text}</div> : null}
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 11,
+                        color: isMine ? "#4761bf" : "#64748b",
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <span>{isMine ? `envoyé · ${message.status}` : "reçu"}</span>
+                      {isMine ? <CheckCheck size={14} /> : null}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+
+          {previewUrl || selectedFile ? (
+            <div style={{ padding: "0 18px 12px" }}>
+              <div
+                style={{
+                  border: "1px solid rgba(148,163,184,0.18)",
+                  borderRadius: 16,
+                  background: "#ffffff",
+                  padding: 12,
+                  display: "grid",
+                  gap: 8,
+                  boxShadow: "0 8px 22px rgba(15, 23, 42, 0.04)",
+                }}
+              >
+                {previewUrl ? (
+                  selectedFile?.type.startsWith("image/") ? (
+                    <img src={previewUrl} alt="Aperçu" style={{ maxHeight: 180, objectFit: "cover", borderRadius: 10, width: "100%" }} />
+                  ) : selectedFile?.type.startsWith("video/") ? (
+                    <video src={previewUrl} controls style={{ maxHeight: 180, borderRadius: 10, width: "100%" }} />
+                  ) : null
+                ) : null}
+                <div style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>{selectedFile?.name || "Pièce jointe"}</div>
+              </div>
             </div>
           ) : null}
 
-          {messages.map((message) => {
-            const isMine = message.sender === activeUser;
-
-            return (
-              <div
-                key={message.id}
-                style={{
-                  display: "flex",
-                  justifyContent: isMine ? "flex-end" : "flex-start",
-                }}
-              >
-                <div
-                  style={{
-                    maxWidth: "75%",
-                    background: isMine
-                      ? "linear-gradient(135deg, #8b5cf6, #7c3aed)"
-                      : "#1a2540",
-                    color: "#edf2ff",
-                    borderRadius: 16,
-                    padding: "10px 12px",
-                    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.2)",
-                  }}
-                >
-                  {message.mediaUrl ? (
-                    message.mediaType === "image" ? (
-                      <img
-                        src={message.mediaUrl}
-                        alt={message.fileName || "Image envoyée"}
-                        style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8 }}
-                      />
-                    ) : message.mediaType === "video" ? (
-                      <video
-                        src={message.mediaUrl}
-                        controls
-                        style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8 }}
-                      />
-                    ) : (
-                      <a
-                        href={message.mediaUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: "#dbeafe", textDecoration: "underline", display: "block", marginBottom: 8 }}
-                      >
-                        {message.fileName || "Fichier joint"}
-                      </a>
-                    )
-                  ) : null}
-
-                  {message.text ? <div>{message.text}</div> : null}
+          {uploading ? (
+            <div style={{ padding: "0 18px 12px" }}>
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>
+                  Téléversement Cloudinary… {uploadProgress}%
+                </div>
+                <div style={{ height: 8, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
                   <div
                     style={{
-                      marginTop: 6,
-                      fontSize: 11,
-                      opacity: 0.8,
-                      textAlign: "right",
+                      width: `${uploadProgress}%`,
+                      height: "100%",
+                      background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
                     }}
-                  >
-                    {isMine ? `envoyé · ${message.status}` : "reçu"}
-                  </div>
+                  />
                 </div>
               </div>
-            );
-          })}
-        </section>
-
-        {previewUrl || selectedFile ? (
-          <div style={{ padding: "0 16px 12px" }}>
-            <div
-              style={{
-                border: "1px solid rgba(148,163,184,0.2)",
-                borderRadius: 12,
-                background: "#0b1020",
-                padding: 12,
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              {previewUrl ? (
-                selectedFile?.type.startsWith("image/") ? (
-                  <img src={previewUrl} alt="Aperçu" style={{ maxHeight: 180, objectFit: "cover", borderRadius: 8 }} />
-                ) : selectedFile?.type.startsWith("video/") ? (
-                  <video src={previewUrl} controls style={{ maxHeight: 180, borderRadius: 8 }} />
-                ) : null
-              ) : null}
-              <div style={{ color: "#dfe8ff", fontSize: 12 }}>{selectedFile?.name || "Pièce jointe"}</div>
             </div>
-          </div>
-        ) : null}
-
-        {uploading ? (
-          <div style={{ padding: "0 16px 12px" }}>
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={{ fontSize: 12, color: "#dfe8ff" }}>Téléversement Cloudinary… {uploadProgress}%</div>
-              <div style={{ height: 8, borderRadius: 999, background: "rgba(148,163,184,0.2)", overflow: "hidden" }}>
-                <div
-                  style={{
-                    width: `${uploadProgress}%`,
-                    height: "100%",
-                    background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         <footer
           style={{
-            padding: 16,
-            borderTop: "1px solid rgba(148,163,184,0.2)",
+            position: "sticky",
+            bottom: 0,
+            zIndex: 10,
+            background: "rgba(255,255,255,0.96)",
+            backdropFilter: "blur(12px)",
+            borderTop: "1px solid rgba(148,163,184,0.14)",
+            padding: "14px 16px",
             display: "flex",
-            gap: 12,
             alignItems: "center",
-            position: "relative",
+            gap: 10,
           }}
         >
           <div style={{ position: "relative" }}>
             <button
               type="button"
               aria-label="Emoji"
-              style={{ padding: "0 12px", fontSize: 20, height: 42, borderRadius: 12, background: "#1a2540", border: "1px solid rgba(148,163,184,0.2)", color: "#edf2ff" }}
               onClick={() => setEmojiPickerOpen((current) => !current)}
+              style={{
+                width: 42,
+                height: 42,
+                border: "1px solid rgba(148,163,184,0.18)",
+                borderRadius: 12,
+                background: "#f8fafc",
+                color: "#334155",
+                display: "grid",
+                placeItems: "center",
+                cursor: "pointer",
+              }}
             >
-              😊
+              <Smile size={18} />
             </button>
 
             {emojiPickerOpen ? (
               <div
                 style={{
                   position: "absolute",
-                  bottom: 52,
+                  bottom: 54,
                   left: 0,
-                  zIndex: 20,
-                  background: "#0b1020",
-                  border: "1px solid rgba(148,163,184,0.2)",
-                  borderRadius: 16,
-                  boxShadow: "0 20px 45px rgba(15, 23, 42, 0.5)",
+                  zIndex: 40,
+                  background: "#ffffff",
+                  border: "1px solid rgba(148,163,184,0.18)",
+                  borderRadius: 18,
+                  boxShadow: "0 24px 52px rgba(15, 23, 42, 0.12)",
                   overflow: "hidden",
                 }}
               >
@@ -508,19 +604,23 @@ export default function ChatPage() {
             onChange={handleFileSelection}
             style={{ display: "none" }}
           />
+
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             style={{
-              padding: "0 12px",
+              width: 42,
               height: 42,
+              border: "1px solid rgba(148,163,184,0.18)",
               borderRadius: 12,
-              background: "#1a2540",
-              color: "#edf2ff",
-              border: "1px solid rgba(148,163,184,0.2)",
+              background: "#f8fafc",
+              color: "#334155",
+              display: "grid",
+              placeItems: "center",
+              cursor: "pointer",
             }}
           >
-            📎
+            <Paperclip size={18} />
           </button>
 
           <input
@@ -533,37 +633,44 @@ export default function ChatPage() {
               }
             }}
             placeholder="Écrire un message..."
-            disabled={loadingAuth || !activeUser || uploading}
+            disabled={isComposerDisabled}
             style={{
               flex: 1,
-              border: "1px solid rgba(148,163,184,0.2)",
-              borderRadius: 12,
-              background: "#0b1020",
-              color: "#edf2ff",
+              border: "1px solid rgba(148,163,184,0.18)",
+              borderRadius: 14,
+              background: "#f8fafc",
+              color: "#0f172a",
               padding: "12px 14px",
-              opacity: loadingAuth || !activeUser || uploading ? 0.7 : 1,
+              fontSize: 15,
+              outline: "none",
+              opacity: isComposerDisabled ? 0.7 : 1,
             }}
           />
+
           <button
             type="button"
             onClick={() => void sendMessage()}
-            disabled={loadingAuth || !activeUser || uploading}
+            disabled={isComposerDisabled}
             style={{
+              width: 46,
+              height: 46,
               border: "none",
-              borderRadius: 12,
-              background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-              color: "white",
-              padding: "0 18px",
-              height: 42,
-              opacity: loadingAuth || !activeUser || uploading ? 0.7 : 1,
+              borderRadius: 14,
+              background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
+              color: "#ffffff",
+              display: "grid",
+              placeItems: "center",
+              boxShadow: "0 14px 28px rgba(79, 124, 255, 0.22)",
+              cursor: isComposerDisabled ? "not-allowed" : "pointer",
+              opacity: isComposerDisabled ? 0.7 : 1,
             }}
           >
-            {uploading ? "Envoi..." : "Envoyer"}
+            <SendHorizontal size={18} />
           </button>
         </footer>
       </div>
 
-      <div style={{ marginTop: 16, color: "#94a3b8", fontSize: 12 }}>
+      <div style={{ marginTop: 14, color: "#64748b", fontSize: 12, textAlign: "center" }}>
         Utilisateur actif : {userLabel}
       </div>
     </main>
