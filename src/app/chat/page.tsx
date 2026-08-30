@@ -16,6 +16,7 @@ import {
   type FirestoreMessage,
 } from "@/lib/firestore-chat";
 import { startPresenceTracking, subscribeToUserPresenceByEmail } from "@/lib/presence";
+import { attachForegroundMessageListener, storeFcmTokenForCurrentUser } from "@/lib/notifications";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import Picker from "emoji-picker-react";
 
@@ -103,6 +104,9 @@ export default function ChatPage() {
       setPartnerOnline(false);
       return;
     }
+
+    void storeFcmTokenForCurrentUser();
+    void attachForegroundMessageListener();
 
     const unsubscribeTyping = subscribeToTypingState((isTyping) => {
       setPartnerTyping(isTyping);
