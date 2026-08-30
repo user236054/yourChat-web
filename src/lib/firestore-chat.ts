@@ -16,15 +16,27 @@ import { USERS } from "@/lib/chat-config";
 
 export type FirestoreMessage = {
   id?: string;
+  senderId?: string;
   senderEmail: string;
   senderName?: string;
   text?: string;
   mediaUrl?: string;
-  mediaType?: "image" | "video" | "file";
-  fileName?: string;
+  mediaType?: "image" | "video" | "file" | null;
+  fileName?: string | null;
   type: "text" | "image" | "video" | "file" | "sticker" | "gif";
   createdAt: any;
   status?: "sent" | "read";
+  replyTo?: string | null;
+  editedAt?: any;
+  deletedAt?: any;
+  isDeleted?: boolean;
+};
+
+export type FirestoreConversation = {
+  participants?: string[];
+  typingBy?: string[];
+  pinnedMessageId?: string | null;
+  updatedAt?: any;
 };
 
 export const PRIVATE_CONVERSATION_ID = "private-conversation";
@@ -38,10 +50,22 @@ export function ensureConversation() {
     {
       participants: [USERS.me.email, USERS.friend.email],
       typingBy: [],
+      pinnedMessageId: null,
       updatedAt: serverTimestamp(),
     },
     { merge: true },
   );
+}
+
+export function subscribeToConversation(onData: (conversation: FirestoreConversation | null) => void) {
+  if (!db || !isFirebaseConfigured) return () => {};
+
+  const conversationRef = doc(db, "conversations", PRIVATE_CONVERSATION_ID);
+
+  return onSnapshot(conversationRef, (snapshot) => {
+    const data = snapshot.data() as FirestoreConversation | undefined;
+    onData(data ?? null);
+  });
 }
 
 export function subscribeToMessages(onData: (messages: FirestoreMessage[]) => void) {
@@ -133,18 +157,23 @@ export async function markConversationMessagesAsRead() {
   await Promise.allSettled(unreadUpdates);
 }
 
-export async function sendTextMessage(text: string) {
+export async function sendTextMessage(text: string, options?: { replyTo?: string | null }) {
   if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
 
   await ensureConversation();
 
   const messageRef = collection(db, "conversations", PRIVATE_CONVERSATION_ID, "messages");
   await addDoc(messageRef, {
+    senderId: auth.currentUser.uid,
     senderEmail: auth.currentUser.email,
     senderName: auth.currentUser.displayName || auth.currentUser.email,
     text,
     type: "text",
     status: "sent",
+    replyTo: options?.replyTo ?? null,
+    editedAt: null,
+    deletedAt: null,
+    isDeleted: false,
     createdAt: serverTimestamp(),
   });
 }
@@ -154,6 +183,7 @@ export async function sendMediaMessage(payload: {
   mediaUrl: string;
   mediaType: "image" | "video" | "file";
   fileName?: string;
+  replyTo?: string | null;
 }) {
   if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
 
@@ -161,6 +191,7 @@ export async function sendMediaMessage(payload: {
 
   const messageRef = collection(db, "conversations", PRIVATE_CONVERSATION_ID, "messages");
   await addDoc(messageRef, {
+    senderId: auth.currentUser.uid,
     senderEmail: auth.currentUser.email,
     senderName: auth.currentUser.displayName || auth.currentUser.email,
     text: payload.text || "",
@@ -169,8 +200,66 @@ export async function sendMediaMessage(payload: {
     fileName: payload.fileName || "Fichier joint",
     type: payload.mediaType,
     status: "sent",
+    replyTo: payload.replyTo ?? null,
+    editedAt: null,
+    deletedAt: null,
+    isDeleted: false,
     createdAt: serverTimestamp(),
   });
+}
+
+export async function updateMessageText(messageId: string, nextText: string) {
+  if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
+
+  const ref = doc(db, "conversations", PRIVATE_CONVERSATION_ID, "messages", messageId);
+  await updateDoc(ref, {
+    text: nextText,
+    editedAt: serverTimestamp(),
+    isDeleted: false,
+    deletedAt: null,
+  });
+}
+
+export async function deleteMessage(messageId: string) {
+  if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
+
+  const ref = doc(db, "conversations", PRIVATE_CONVERSATION_ID, "messages", messageId);
+  await updateDoc(ref, {
+    text: "Ce message a été supprimé",
+    mediaUrl: null,
+    mediaType: null,
+    fileName: null,
+    isDeleted: true,
+    deletedAt: serverTimestamp(),
+  });
+}
+
+export async function pinMessage(messageId: string) {
+  if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
+
+  const conversationRef = doc(db, "conversations", PRIVATE_CONVERSATION_ID);
+  await setDoc(
+    conversationRef,
+    {
+      pinnedMessageId: messageId,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+export async function unpinMessage() {
+  if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
+
+  const conversationRef = doc(db, "conversations", PRIVATE_CONVERSATION_ID);
+  await setDoc(
+    conversationRef,
+    {
+      pinnedMessageId: null,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }
 
 export async function markMessageAsRead(messageId: string) {

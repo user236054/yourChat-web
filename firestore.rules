@@ -8,11 +8,39 @@ service cloud.firestore {
       ];
     }
 
+    function isConversationParticipant() {
+      return isAllowedUser() && request.auth.token.email in [
+        'me@example.com',
+        'friend@example.com'
+      ];
+    }
+
     match /conversations/{conversationId} {
-      allow get, list, create, update, delete: if isAllowedUser();
+      allow get, list: if isAllowedUser();
+      allow create: if isAllowedUser() && request.resource.data.participants is list;
+      allow update: if isAllowedUser() && (
+        request.resource.data.participants == resource.data.participants ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinnedMessageId', 'updatedAt', 'typingBy'])
+      );
+      allow delete: if isAllowedUser();
 
       match /messages/{messageId} {
-        allow get, list, create, update, delete: if isAllowedUser();
+        allow get, list, create: if isAllowedUser();
+        allow update: if isAllowedUser() &&
+          request.auth.token.email == resource.data.senderEmail &&
+          request.resource.data.senderEmail == resource.data.senderEmail &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'text',
+            'editedAt',
+            'deletedAt',
+            'isDeleted',
+            'mediaUrl',
+            'mediaType',
+            'fileName',
+            'status',
+            'updatedAt'
+          ]);
+        allow delete: if isAllowedUser() && request.auth.token.email == resource.data.senderEmail;
       }
     }
 

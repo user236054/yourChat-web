@@ -3,19 +3,26 @@ import { PRIVATE_CHAT_ID, USERS, type UserKey } from "@/lib/chat-config";
 export type ChatMessage = {
   id: string;
   sender: UserKey;
+  senderId?: string;
+  senderEmail?: string;
   text: string;
   status: "sent" | "read";
   createdAt: number;
   mediaUrl?: string;
   mediaType?: "image" | "video" | "file";
-  fileName?: string;
+  fileName?: string | null;
+  replyTo?: string | null;
+  editedAt?: number | null;
+  deletedAt?: number | null;
+  isDeleted?: boolean;
 };
 
 const STORAGE_KEY = `messagerie-prive-${PRIVATE_CHAT_ID}`;
+const DEFAULT_MESSAGE_EPOCH = 1700000000000;
 
 const defaultMessages: ChatMessage[] = [
-  { id: "1", sender: "friend", text: "Salut !", status: "read", createdAt: Date.now() - 120000 },
-  { id: "2", sender: "me", text: "Ça marche, on peut parler ici.", status: "read", createdAt: Date.now() - 90000 },
+  { id: "1", sender: "friend", text: "Salut !", status: "read", createdAt: DEFAULT_MESSAGE_EPOCH - 120000 },
+  { id: "2", sender: "me", text: "Ça marche, on peut parler ici.", status: "read", createdAt: DEFAULT_MESSAGE_EPOCH - 90000 },
 ];
 
 export function loadMessages(): ChatMessage[] {

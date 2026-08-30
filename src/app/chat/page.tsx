@@ -2,13 +2,18 @@
 
 import { onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
 import {
+  CheckCheck,
   LogOut,
+  MessageSquareReply,
+  MoreHorizontal,
   Paperclip,
+  Pin,
   SendHorizontal,
   Smile,
-  Sparkles,
-  CheckCheck,
-  MessageSquareText,
+  Trash2,
+  Pencil,
+  X,
+  PinOff,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
@@ -16,13 +21,18 @@ import { clearStoredUser, getStoredUser, getUserByEmail, setStoredUser, USERS, t
 import { loadMessages, saveMessages, type ChatMessage } from "@/lib/chat-store";
 import { auth, isFirebaseConfigured } from "@/lib/firebase";
 import {
+  deleteMessage,
   markConversationMessagesAsRead,
+  pinMessage,
   sendMediaMessage,
   sendTextMessage,
   setTypingState,
+  subscribeToConversation,
   subscribeToMessages,
   subscribeToTypingState,
   type FirestoreMessage,
+  unpinMessage,
+  updateMessageText,
 } from "@/lib/firestore-chat";
 import { startPresenceTracking, subscribeToUserPresenceByEmail } from "@/lib/presence";
 import {
@@ -36,6 +46,9 @@ import Picker from "emoji-picker-react";
 export default function ChatPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
   const [activeUser, setActiveUser] = useState<UserKey | null>(null);
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -47,8 +60,11 @@ export default function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setNotificationPermission(getNotificationPermissionState());
@@ -102,12 +118,18 @@ export default function ChatPage() {
         .map((message) => ({
           id: message.id || crypto.randomUUID(),
           sender: getUserByEmail(message.senderEmail) ?? "me",
+          senderId: message.senderId ?? message.senderEmail,
           text: message.text || "",
           status: message.status || "sent",
           createdAt: message.createdAt?.toDate ? message.createdAt.toDate().getTime() : Date.now(),
           mediaUrl: message.mediaUrl,
           mediaType: message.mediaType || (message.type === "image" ? "image" : message.type === "video" ? "video" : message.mediaUrl ? "file" : undefined),
           fileName: message.fileName,
+          replyTo: message.replyTo ?? null,
+          editedAt: message.editedAt?.toDate ? message.editedAt.toDate().getTime() : null,
+          isDeleted: Boolean(message.isDeleted),
+          deletedAt: message.deletedAt?.toDate ? message.deletedAt.toDate().getTime() : null,
+          senderEmail: message.senderEmail,
         }))
         .sort((a, b) => a.createdAt - b.createdAt);
 
@@ -132,6 +154,10 @@ export default function ChatPage() {
       setPartnerTyping(isTyping);
     });
 
+    const unsubscribeConversation = subscribeToConversation((conversation) => {
+      setPinnedMessageId(conversation?.pinnedMessageId ?? null);
+    });
+
     const partnerEmail = activeUser === "me" ? USERS.friend.email : USERS.me.email;
     const unsubscribePresence = subscribeToUserPresenceByEmail(partnerEmail, (isOnline) => {
       setPartnerOnline(isOnline);
@@ -141,6 +167,7 @@ export default function ChatPage() {
 
     return () => {
       unsubscribeTyping();
+      unsubscribeConversation();
       unsubscribePresence();
       unsubscribePresenceTracker();
     };
@@ -148,6 +175,10 @@ export default function ChatPage() {
 
   const partner = activeUser === "me" ? USERS.friend : USERS.me;
   const isComposerDisabled = loadingAuth !== false || !activeUser || uploading;
+  const currentUserUid = auth?.currentUser?.uid;
+  const messageById = Object.fromEntries(messages.map((message) => [message.id, message]));
+  const pinnedMessage = pinnedMessageId ? messageById[pinnedMessageId] : null;
+  const replyMessage = replyToMessageId ? messageById[replyToMessageId] : null;
 
   const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -171,6 +202,13 @@ export default function ChatPage() {
     }
   };
 
+  const resetComposer = () => {
+    setDraft("");
+    setReplyToMessageId(null);
+    setEditingMessageId(null);
+    setMenuOpenId(null);
+  };
+
   const sendMessage = async () => {
     const hasContent = Boolean(draft.trim()) || Boolean(selectedFile);
     if (!hasContent || uploading) return;
@@ -190,6 +228,7 @@ export default function ChatPage() {
             mediaUrl: cloudResult.url,
             mediaType: cloudResult.type,
             fileName: cloudResult.fileName,
+            replyTo: replyToMessageId ?? null,
           });
         } else {
           const nextMessage: ChatMessage = {
@@ -201,6 +240,7 @@ export default function ChatPage() {
             mediaUrl: cloudResult.url,
             mediaType: cloudResult.type,
             fileName: cloudResult.fileName,
+            replyTo: replyToMessageId ?? null,
           };
 
           setMessages((current) => {
@@ -216,6 +256,7 @@ export default function ChatPage() {
         setUploading(false);
         setSelectedFile(null);
         setPreviewUrl(null);
+        setReplyToMessageId(null);
         if (fileInputRef.current) {
           fileInputRef.current.value = "";
         }
@@ -223,8 +264,17 @@ export default function ChatPage() {
       return;
     }
 
+    if (editingMessageId) {
+      if (isFirebaseConfigured && auth?.currentUser) {
+        await updateMessageText(editingMessageId, trimmedText);
+      }
+      resetComposer();
+      return;
+    }
+
     if (isFirebaseConfigured && auth?.currentUser) {
-      await sendTextMessage(trimmedText);
+      await sendTextMessage(trimmedText, { replyTo: replyToMessageId ?? null });
+      resetComposer();
       return;
     }
 
@@ -234,6 +284,7 @@ export default function ChatPage() {
       text: trimmedText,
       status: "sent",
       createdAt: Date.now(),
+      replyTo: replyToMessageId ?? null,
     };
 
     setMessages((current) => {
@@ -241,6 +292,64 @@ export default function ChatPage() {
       saveMessages(next);
       return next;
     });
+    resetComposer();
+  };
+
+  const beginEditMessage = (message: ChatMessage) => {
+    if (!message.text || message.isDeleted) return;
+    setEditingMessageId(message.id);
+    setReplyToMessageId(null);
+    setDraft(message.text);
+    setMenuOpenId(null);
+    inputRef.current?.focus();
+  };
+
+  const beginReplyMessage = (messageId: string) => {
+    setReplyToMessageId(messageId);
+    setEditingMessageId(null);
+    setMenuOpenId(null);
+    inputRef.current?.focus();
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    const shouldDelete = window.confirm("Supprimer ce message ? Il sera remplacé par \"Ce message a été supprimé\".");
+    if (!shouldDelete) return;
+
+    if (isFirebaseConfigured && auth?.currentUser) {
+      await deleteMessage(messageId);
+    } else {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === messageId
+            ? { ...message, isDeleted: true, deletedAt: Date.now(), text: "Ce message a été supprimé" }
+            : message,
+        ),
+      );
+    }
+
+    setMenuOpenId(null);
+  };
+
+  const handlePinMessage = async (messageId: string) => {
+    if (isFirebaseConfigured && auth?.currentUser) {
+      await pinMessage(messageId);
+    }
+    setMenuOpenId(null);
+  };
+
+  const handleScrollToMessage = (messageId: string) => {
+    const node = messageRefs.current[messageId];
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      node.style.outline = "2px solid rgba(79, 124, 255, 0.7)";
+      node.style.outlineOffset = "4px";
+      window.setTimeout(() => {
+        if (node) {
+          node.style.outline = "none";
+          node.style.outlineOffset = "0";
+        }
+      }, 1200);
+    }
   };
 
   useEffect(() => {
@@ -272,6 +381,12 @@ export default function ChatPage() {
     };
   }, [previewUrl]);
 
+  useEffect(() => {
+    const closeMenu = () => setMenuOpenId(null);
+    window.addEventListener("click", closeMenu);
+    return () => window.removeEventListener("click", closeMenu);
+  }, []);
+
   const userLabel = activeUser ? USERS[activeUser].name : "Connexion...";
 
   const handleEmojiSelect = (emojiData: { emoji: string }) => {
@@ -300,6 +415,13 @@ export default function ChatPage() {
       nextInput.focus();
       nextInput.setSelectionRange(cursorPosition, cursorPosition);
     });
+  };
+
+  const getQuotedText = (message: ChatMessage | undefined) => {
+    if (!message) return "Message supprimé";
+    if (message.isDeleted) return "Ce message a été supprimé";
+    if (message.mediaUrl) return message.fileName || "Pièce jointe";
+    return message.text || "Pièce jointe";
   };
 
   return (
@@ -389,6 +511,45 @@ export default function ChatPage() {
           </button>
         </header>
 
+        {pinnedMessage ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              background: "#eff6ff",
+              borderBottom: "1px solid rgba(148,163,184,0.12)",
+              padding: "10px 18px",
+              color: "#1e3a8a",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <Pin size={15} />
+              <span>Message épinglé</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void unpinMessage()}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "#1e3a8a",
+                cursor: "pointer",
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <PinOff size={14} />
+              Désépingler
+            </button>
+          </div>
+        ) : null}
+
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
           <section
             style={{
@@ -419,6 +580,13 @@ export default function ChatPage() {
 
             {messages.map((message) => {
               const isMine = message.sender === activeUser;
+              const isDeleted = Boolean(message.isDeleted);
+              const canManageOwnMessage = Boolean(
+                (message.senderId && currentUserUid && message.senderId === currentUserUid) ||
+                  (!message.senderId && isMine),
+              );
+              const referenceMessage = message.replyTo ? messageById[message.replyTo] : null;
+              const bubbleText = isDeleted ? "Ce message a été supprimé" : message.text || "";
 
               return (
                 <div
@@ -429,67 +597,294 @@ export default function ChatPage() {
                   }}
                 >
                   <div
+                    ref={(node) => {
+                      if (node) {
+                        messageRefs.current[message.id] = node;
+                      }
+                    }}
                     style={{
                       maxWidth: "75%",
-                      background: isMine ? "linear-gradient(135deg, #eaf1ff 0%, #dfe9ff 100%)" : "#ffffff",
-                      color: "#0f172a",
-                      borderRadius: 18,
-                      padding: "12px 14px",
-                      boxShadow: "0 8px 22px rgba(15, 23, 42, 0.06)",
-                      border: isMine ? "1px solid rgba(79, 124, 255, 0.14)" : "1px solid rgba(148,163,184,0.12)",
+                      display: "grid",
+                      gap: 8,
                     }}
                   >
-                    {message.mediaUrl ? (
-                      message.mediaType === "image" ? (
-                        <img
-                          src={message.mediaUrl}
-                          alt={message.fileName || "Image envoyée"}
-                          style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                        />
-                      ) : message.mediaType === "video" ? (
-                        <video
-                          src={message.mediaUrl}
-                          controls
-                          style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                        />
-                      ) : (
-                        <a
-                          href={message.mediaUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            color: "#3453d1",
-                            textDecoration: "underline",
-                            display: "block",
-                            marginBottom: 8,
-                            wordBreak: "break-all",
-                          }}
-                        >
-                          {message.fileName || "Fichier joint"}
-                        </a>
-                      )
+                    {referenceMessage ? (
+                      <button
+                        type="button"
+                        onClick={() => handleScrollToMessage(referenceMessage.id || "")}
+                        style={{
+                          textAlign: "left",
+                          alignSelf: isMine ? "flex-end" : "flex-start",
+                          maxWidth: "90%",
+                          border: "1px solid rgba(148,163,184,0.16)",
+                          borderRadius: 12,
+                          padding: "8px 10px",
+                          background: "rgba(255,255,255,0.75)",
+                          color: "#334155",
+                          fontSize: 12,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>
+                          Réponse à {referenceMessage.sender === activeUser ? "vous" : partner.name}
+                        </div>
+                        <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {getQuotedText(referenceMessage)}
+                        </div>
+                      </button>
                     ) : null}
 
-                    {message.text ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{message.text}</div> : null}
-                    <div
-                      style={{
-                        marginTop: 8,
-                        fontSize: 11,
-                        color: isMine ? "#4761bf" : "#64748b",
-                        display: "flex",
-                        justifyContent: "flex-end",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
-                    >
-                      <span>{isMine ? `envoyé · ${message.status}` : "reçu"}</span>
-                      {isMine ? <CheckCheck size={14} /> : null}
+                    <div style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <div
+                        style={{
+                          flex: 1,
+                          background: isDeleted
+                            ? "#f8fafc"
+                            : isMine
+                              ? "linear-gradient(135deg, #eaf1ff 0%, #dfe9ff 100%)"
+                              : "#ffffff",
+                          color: isDeleted ? "#64748b" : "#0f172a",
+                          borderRadius: 18,
+                          padding: "12px 14px",
+                          boxShadow: "0 8px 22px rgba(15, 23, 42, 0.06)",
+                          border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : isMine ? "1px solid rgba(79, 124, 255, 0.14)" : "1px solid rgba(148,163,184,0.12)",
+                          opacity: isDeleted ? 0.8 : 1,
+                          minWidth: 0,
+                        }}
+                      >
+                        {message.mediaUrl && !isDeleted ? (
+                          message.mediaType === "image" ? (
+                            <img
+                              src={message.mediaUrl}
+                              alt={message.fileName || "Image envoyée"}
+                              style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                            />
+                          ) : message.mediaType === "video" ? (
+                            <video
+                              src={message.mediaUrl}
+                              controls
+                              style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                            />
+                          ) : (
+                            <a
+                              href={message.mediaUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                color: "#3453d1",
+                                textDecoration: "underline",
+                                display: "block",
+                                marginBottom: 8,
+                                wordBreak: "break-all",
+                              }}
+                            >
+                              {message.fileName || "Fichier joint"}
+                            </a>
+                          )
+                        ) : null}
+
+                        {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
+
+                        <div
+                          style={{
+                            marginTop: 8,
+                            fontSize: 11,
+                            color: isDeleted ? "#94a3b8" : isMine ? "#4761bf" : "#64748b",
+                            display: "flex",
+                            justifyContent: "flex-end",
+                            alignItems: "center",
+                            gap: 6,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <span>{isMine ? `envoyé · ${message.status}` : "reçu"}</span>
+                          {message.editedAt ? <span style={{ color: "#64748b" }}>modifié</span> : null}
+                          {isMine ? <CheckCheck size={14} /> : null}
+                        </div>
+                      </div>
+
+                      <div style={{ position: "relative" }} onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          aria-label="Actions du message"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenId((current) => (current === message.id ? null : message.id));
+                          }}
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            border: "1px solid rgba(148,163,184,0.14)",
+                            background: "rgba(255,255,255,0.8)",
+                            color: "#334155",
+                            display: "grid",
+                            placeItems: "center",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <MoreHorizontal size={14} />
+                        </button>
+
+                        {menuOpenId === message.id ? (
+                          <div
+                            style={{
+                              position: "absolute",
+                              right: 0,
+                              top: 36,
+                              zIndex: 20,
+                              minWidth: 180,
+                              background: "#ffffff",
+                              border: "1px solid rgba(148,163,184,0.18)",
+                              borderRadius: 14,
+                              boxShadow: "0 18px 44px rgba(15, 23, 42, 0.08)",
+                              padding: 8,
+                              display: "grid",
+                              gap: 4,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => beginReplyMessage(message.id)}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                background: "transparent",
+                                border: "none",
+                                color: "#0f172a",
+                                padding: "8px 10px",
+                                borderRadius: 8,
+                                textAlign: "left",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <MessageSquareReply size={14} />
+                              Répondre
+                            </button>
+                            {!isDeleted && canManageOwnMessage ? (
+                              <button
+                                type="button"
+                                onClick={() => beginEditMessage(message)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  background: "transparent",
+                                  border: "none",
+                                  color: "#0f172a",
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  textAlign: "left",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <Pencil size={14} />
+                                Modifier
+                              </button>
+                            ) : null}
+                            {!isDeleted && canManageOwnMessage ? (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteMessage(message.id)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  background: "transparent",
+                                  border: "none",
+                                  color: "#dc2626",
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  textAlign: "left",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <Trash2 size={14} />
+                                Supprimer
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (pinnedMessageId === message.id) {
+                                  void unpinMessage();
+                                } else {
+                                  void handlePinMessage(message.id);
+                                }
+                              }}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                background: "transparent",
+                                border: "none",
+                                color: "#0f172a",
+                                padding: "8px 10px",
+                                borderRadius: 8,
+                                textAlign: "left",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
+                              {pinnedMessageId === message.id ? "Désépingler" : "Épingler"}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 </div>
               );
             })}
           </section>
+
+          {replyMessage || editingMessageId ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                borderTop: "1px solid rgba(148,163,184,0.12)",
+                padding: "12px 18px 0",
+              }}
+            >
+              <div
+                style={{
+                  background: "#f8fafc",
+                  border: "1px solid rgba(148,163,184,0.14)",
+                  borderRadius: 12,
+                  padding: "8px 10px",
+                  color: "#334155",
+                  fontSize: 12,
+                  maxWidth: "80%",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {editingMessageId ? "Modification du message" : `Réponse à ${replyMessage ? getQuotedText(replyMessage) : "message"}`}
+              </div>
+              <button
+                type="button"
+                onClick={resetComposer}
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 28,
+                  height: 28,
+                  borderRadius: 999,
+                  border: "1px solid rgba(148,163,184,0.14)",
+                  background: "transparent",
+                  color: "#334155",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ) : null}
 
           {previewUrl || selectedFile ? (
             <div style={{ padding: "0 18px 12px" }}>
@@ -632,7 +1027,7 @@ export default function ChatPage() {
                 void sendMessage();
               }
             }}
-            placeholder="Écrire un message..."
+            placeholder={editingMessageId ? "Modifier le message..." : "Écrire un message..."}
             disabled={isComposerDisabled}
             style={{
               flex: 1,
