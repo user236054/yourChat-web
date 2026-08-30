@@ -61,6 +61,317 @@ import { extractUrls, fetchLinkPreview, type LinkPreview } from "@/lib/link-prev
 import { enqueueMessage, getQueuedMessageCount, loadQueuedMessages, removeQueuedMessage } from "@/lib/offline-queue";
 import Picker from "emoji-picker-react";
 
+type VoiceNotePlayerProps = {
+  src: string;
+  title?: string;
+  duration?: number | null;
+  isMine: boolean;
+  theme: "light" | "dark";
+};
+
+function formatTime(seconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(seconds || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+function VoiceNotePlayer({ src, title, duration, isMine, theme }: VoiceNotePlayerProps) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const progressRef = useRef<HTMLDivElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(duration ?? 0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isDragging, setIsDragging] = useState(false);
+  const waveformBars = useRef(Array.from({ length: 26 }, (_, index) => 18 + ((index * 13) % 42) + (index % 4) * 8));
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.playbackRate = playbackRate;
+  }, [playbackRate]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleLoadedMetadata = () => {
+      const nextDuration = Number.isFinite(audio.duration) ? audio.duration : duration ?? 0;
+      setAudioDuration(nextDuration);
+      setCurrentTime(0);
+    };
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime || 0);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+      audio.currentTime = 0;
+    };
+
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("timeupdate", handleTimeUpdate);
+    audio.addEventListener("ended", handleEnded);
+
+    return () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("timeupdate", handleTimeUpdate);
+      audio.removeEventListener("ended", handleEnded);
+    };
+  }, [duration, src]);
+
+  useEffect(() => {
+    return () => {
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+      }
+    };
+  }, [src]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handlePointerUp = () => setIsDragging(false);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => window.removeEventListener("pointerup", handlePointerUp);
+  }, [isDragging]);
+
+  const totalDuration = audioDuration > 0 ? audioDuration : duration ?? 0;
+  const progress = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
+
+  const seekToPosition = (clientX: number) => {
+    const bar = progressRef.current;
+    const audio = audioRef.current;
+    if (!bar || !audio || totalDuration <= 0) return;
+
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+    const nextTime = ratio * totalDuration;
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const togglePlayback = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (audio.paused) {
+      try {
+        await audio.play();
+        setIsPlaying(true);
+      } catch (error) {
+        console.error("Voice playback failed", error);
+      }
+      return;
+    }
+
+    audio.pause();
+    setIsPlaying(false);
+  };
+
+  const handleSpeedCycle = () => {
+    const nextSpeeds = [1, 1.5, 2];
+    const currentIndex = nextSpeeds.indexOf(playbackRate);
+    const nextRate = nextSpeeds[(currentIndex + 1) % nextSpeeds.length];
+    setPlaybackRate(nextRate);
+  };
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 10,
+        minWidth: 260,
+        width: "100%",
+        borderRadius: 16,
+        padding: isMine ? "12px 12px 10px" : "12px 12px 10px",
+        background: isMine
+          ? "linear-gradient(135deg, rgba(79,70,229,0.98) 0%, rgba(124,58,237,0.96) 100%)"
+          : theme === "dark"
+            ? "linear-gradient(180deg, rgba(15,23,42,0.98) 0%, rgba(30,41,59,0.92) 100%)"
+            : "linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,250,252,0.98) 100%)",
+        border: isMine ? "1px solid rgba(255,255,255,0.18)" : theme === "dark" ? "1px solid rgba(148,163,184,0.18)" : "1px solid rgba(148,163,184,0.18)",
+        boxShadow: isMine
+          ? "0 14px 26px rgba(79, 70, 229, 0.24)"
+          : theme === "dark"
+            ? "0 12px 22px rgba(15, 23, 42, 0.24)"
+            : "0 12px 22px rgba(148, 163, 184, 0.18)",
+      }}
+    >
+      <audio ref={audioRef} src={src} preload="metadata" />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          type="button"
+          onClick={() => void togglePlayback()}
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: "50%",
+            border: "none",
+            background: isMine
+              ? "rgba(255,255,255,0.18)"
+              : theme === "dark"
+                ? "linear-gradient(135deg, rgba(139,92,246,0.26), rgba(168,85,247,0.2))"
+                : "linear-gradient(135deg, rgba(79,70,229,0.12), rgba(168,85,247,0.1))",
+            color: isMine ? "#ffffff" : theme === "dark" ? "#ddd6fe" : "#4f46e5",
+            display: "grid",
+            placeItems: "center",
+            cursor: "pointer",
+            boxShadow: isMine ? "0 8px 18px rgba(15, 23, 42, 0.18)" : "0 8px 18px rgba(79, 70, 229, 0.12)",
+          }}
+          aria-label={isPlaying ? "Pause" : "Lecture"}
+        >
+          {isPlaying ? <PauseIcon size={15} /> : <PlayIcon size={15} />}
+        </button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+          <div style={{ display: "grid", gap: 4, flex: 1, minWidth: 0 }}>
+            <div style={{ color: isMine ? "rgba(255,255,255,0.92)" : theme === "dark" ? "#e2e8f0" : "#1e293b", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {title || "Message vocal"}
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.85, color: isMine ? "rgba(255,255,255,0.75)" : theme === "dark" ? "#cbd5e1" : "#475569" }}>
+              {formatTime(currentTime)} / {formatTime(totalDuration)}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSpeedCycle}
+            style={{
+              border: isMine ? "1px solid rgba(255,255,255,0.18)" : "1px solid rgba(148,163,184,0.2)",
+              background: isMine ? "rgba(255,255,255,0.1)" : theme === "dark" ? "rgba(15,23,42,0.7)" : "rgba(255,255,255,0.9)",
+              color: isMine ? "#ffffff" : theme === "dark" ? "#e2e8f0" : "#334155",
+              borderRadius: 999,
+              padding: "4px 7px",
+              fontSize: 10,
+              fontWeight: 800,
+              cursor: "pointer",
+              minWidth: 34,
+            }}
+            aria-label="Changer la vitesse de lecture"
+          >
+            {playbackRate}x
+          </button>
+        </div>
+      </div>
+
+      <div
+        ref={progressRef}
+        onPointerDown={(event) => {
+          setIsDragging(true);
+          seekToPosition(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (isDragging) {
+            seekToPosition(event.clientX);
+          }
+        }}
+        style={{
+          position: "relative",
+          width: "100%",
+          height: 30,
+          borderRadius: 999,
+          background: isMine
+            ? "rgba(255,255,255,0.14)"
+            : theme === "dark"
+              ? "rgba(15, 23, 42, 0.8)"
+              : "rgba(148,163,184,0.12)",
+          border: isMine ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(148,163,184,0.18)",
+          overflow: "hidden",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 7px",
+          boxSizing: "border-box",
+          boxShadow: isMine ? "inset 0 1px 0 rgba(255,255,255,0.08)" : "inset 0 1px 0 rgba(255,255,255,0.3)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "end", justifyContent: "space-between", gap: 2, width: "100%", height: "100%", paddingTop: 6, paddingBottom: 6 }}>
+          {waveformBars.current.map((barHeight, index) => (
+            <span
+              key={`${title || "wave"}-${index}`}
+              style={{
+                display: "block",
+                width: 4,
+                height: `${barHeight}px`,
+                borderRadius: 999,
+                background: index / waveformBars.current.length < progress / 100
+                  ? isMine
+                    ? "rgba(255,255,255,0.96)"
+                    : theme === "dark"
+                      ? "#c4b5fd"
+                      : "#8b5cf6"
+                  : isMine
+                    ? "rgba(255,255,255,0.28)"
+                    : theme === "dark"
+                      ? "rgba(148,163,184,0.28)"
+                      : "rgba(148,163,184,0.32)",
+                transition: "background 120ms ease, height 120ms ease",
+              }}
+            />
+          ))}
+        </div>
+
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: `${progress}%`,
+            background: isMine
+              ? "linear-gradient(90deg, rgba(255,255,255,0.16), rgba(255,255,255,0.28))"
+              : theme === "dark"
+                ? "linear-gradient(90deg, rgba(167,139,250,0.32), rgba(196,181,253,0.4))"
+                : "linear-gradient(90deg, rgba(99,102,241,0.15), rgba(168,85,247,0.18))",
+            borderRadius: 999,
+            pointerEvents: "none",
+          }}
+        />
+
+        <div
+          style={{
+            position: "absolute",
+            left: `calc(${Math.min(Math.max(progress, 0), 100)}% - 7px)`,
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 14,
+            height: 14,
+            borderRadius: "50%",
+            background: isMine ? "#ffffff" : theme === "dark" ? "#f5f3ff" : "#4f46e5",
+            boxShadow: isMine ? "0 0 0 4px rgba(255,255,255,0.18)" : "0 0 0 4px rgba(79,70,229,0.15)",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PlayIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M8 6.5v11l9-5.5-9-5.5Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function PauseIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="7" y="5" width="3.5" height="14" rx="1.5" fill="currentColor" />
+      <rect x="13.5" y="5" width="3.5" height="14" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -98,6 +409,16 @@ export default function ChatPage() {
   const [partnerProfilePhotoUrl, setPartnerProfilePhotoUrl] = useState<string | null>(null);
   const [profilePhotoLoading, setProfilePhotoLoading] = useState(false);
   const [linkPreviews, setLinkPreviews] = useState<Record<string, Record<string, LinkPreview | null>>>({});
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchIndex, setSearchIndex] = useState(0);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [newMessagesCount, setNewMessagesCount] = useState(0);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const lastVisibleMessageIdRef = useRef<string | null>(null);
+  const isAtBottomRef = useRef(true);
 
   useEffect(() => {
     setHasHydrated(true);
@@ -331,6 +652,24 @@ export default function ChatPage() {
   const messageById = Object.fromEntries(messages.map((message) => [message.id, message]));
   const pinnedMessage = pinnedMessageId ? messageById[pinnedMessageId] : null;
   const replyMessage = replyToMessageId ? messageById[replyToMessageId] : null;
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const searchMatches = normalizedSearchTerm
+    ? messages.filter((message) => !message.isDeleted && Boolean(message.text) && message.text.toLowerCase().includes(normalizedSearchTerm))
+    : [];
+
+  const renderHighlightedText = (value: string) => {
+    if (!normalizedSearchTerm || !searchOpen) return value;
+    const escapedSearch = normalizedSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(${escapedSearch})`, "ig");
+    const segments = value.split(pattern);
+
+    return segments.map((segment, index) => {
+      const isMatch = segment.toLowerCase() === normalizedSearchTerm;
+      return isMatch ? <mark key={`${segment}-${index}`} style={{ background: "rgba(250,204,21,0.45)", color: "inherit", padding: "0 2px", borderRadius: 4 }}>{segment}</mark> : <span key={`${segment}-${index}`}>{segment}</span>;
+    });
+  };
+
+  const draftStorageKey = activeUser ? `messagerie-prive-draft-${activeUser}` : null;
   const palette = theme === "dark"
     ? {
         pageBg: "#0f172a",
@@ -562,6 +901,10 @@ export default function ChatPage() {
     setReplyToMessageId(null);
     setEditingMessageId(null);
     setMenuOpenId(null);
+
+    if (typeof window !== "undefined" && draftStorageKey) {
+      window.localStorage.removeItem(draftStorageKey);
+    }
   };
 
   const sendMessage = async () => {
@@ -771,6 +1114,42 @@ export default function ChatPage() {
     }
   };
 
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    container.scrollTo({ top: container.scrollHeight, behavior });
+    setShowScrollToBottom(false);
+    setNewMessagesCount(0);
+  };
+
+  const moveSearchResult = (direction: 1 | -1) => {
+    if (!searchMatches.length) return;
+
+    const nextIndex = (searchIndex + direction + searchMatches.length) % searchMatches.length;
+    setSearchIndex(nextIndex);
+    handleScrollToMessage(searchMatches[nextIndex].id);
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !activeUser) return;
+
+    const savedDraft = window.localStorage.getItem(`messagerie-prive-draft-${activeUser}`);
+    if (savedDraft && savedDraft !== draft) {
+      setDraft(savedDraft);
+    }
+  }, [activeUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !activeUser) return;
+
+    if (draft.trim()) {
+      window.localStorage.setItem(`messagerie-prive-draft-${activeUser}`, draft);
+    } else {
+      window.localStorage.removeItem(`messagerie-prive-draft-${activeUser}`);
+    }
+  }, [draft, activeUser]);
+
   useEffect(() => {
     if (!isFirebaseConfigured || !auth || !activeUser) {
       return;
@@ -791,6 +1170,112 @@ export default function ChatPage() {
       void setTypingState(false);
     };
   }, [draft, activeUser]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    if (document.visibilityState !== "visible") {
+      const unreadCount = messages.filter((message) => message.sender !== activeUser && !message.isDeleted).length;
+      if (unreadCount > 0) {
+        document.title = `(${unreadCount}) yourChat`;
+      }
+      return;
+    }
+
+    document.title = "yourChat";
+  }, [messages, activeUser]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (typeof document === "undefined") return;
+      if (document.visibilityState === "visible") {
+        document.title = "yourChat";
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const updateBottomState = () => {
+      const distanceFromBottom = container.scrollHeight - (container.scrollTop + container.clientHeight);
+      const isBottom = distanceFromBottom <= 120;
+      isAtBottomRef.current = isBottom;
+      setShowScrollToBottom(!isBottom);
+      if (isBottom) {
+        setNewMessagesCount(0);
+      }
+      console.log("[scroll-check] bottom-state", {
+        distanceFromBottom,
+        threshold: 120,
+        isAtBottom: isBottom,
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+        clientHeight: container.clientHeight,
+      });
+    };
+
+    updateBottomState();
+    container.addEventListener("scroll", updateBottomState, { passive: true });
+    return () => container.removeEventListener("scroll", updateBottomState);
+  }, [messages.length]);
+
+  useEffect(() => {
+    if (!messages.length) return;
+
+    const lastMessage = messages[messages.length - 1];
+    if (lastVisibleMessageIdRef.current === null) {
+      lastVisibleMessageIdRef.current = lastMessage.id;
+      return;
+    }
+
+    const isIncomingFromPartner = lastMessage.id !== lastVisibleMessageIdRef.current && lastMessage.sender !== activeUser;
+    if (isIncomingFromPartner) {
+      const container = messagesContainerRef.current;
+      if (!container) return;
+
+      const distanceFromBottom = container.scrollHeight - (container.scrollTop + container.clientHeight);
+      const isAtBottom = isAtBottomRef.current;
+
+      console.log("[scroll-check] incoming-message", {
+        messageId: lastMessage.id,
+        sender: lastMessage.sender,
+        activeUser,
+        distanceFromBottom,
+        isAtBottom,
+        threshold: 120,
+      });
+
+      if (isAtBottom) {
+        requestAnimationFrame(() => {
+          container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+        });
+        setNewMessagesCount(0);
+      } else {
+        setNewMessagesCount((current) => current + 1);
+        setShowScrollToBottom(true);
+      }
+    }
+
+    lastVisibleMessageIdRef.current = lastMessage.id;
+  }, [messages, activeUser]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container || !messages.length) return;
+
+    const distanceFromBottom = container.scrollHeight - (container.scrollTop + container.clientHeight);
+    const isAtBottom = distanceFromBottom <= 120;
+    if (isAtBottom && messages[messages.length - 1]?.sender !== activeUser) {
+      requestAnimationFrame(() => {
+        container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+      });
+    }
+  }, [messages, activeUser]);
 
   useEffect(() => {
     return () => {
@@ -1359,7 +1844,12 @@ export default function ChatPage() {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button type="button" aria-label="Recherche" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
+              <button
+                type="button"
+                aria-label="Recherche"
+                onClick={() => setSearchOpen((current) => !current)}
+                style={{ ...headerActionStyle, color: searchOpen ? palette.text : palette.textMuted, background: searchOpen ? (theme === "dark" ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.1)") : headerActionStyle.background }}
+              >
                 <Search size={16} />
               </button>
               <button type="button" aria-label="Appel audio" style={{ ...headerActionStyle, color: palette.textMuted }} disabled>
@@ -1378,6 +1868,161 @@ export default function ChatPage() {
               </button>
             </div>
           </header>
+
+          {lightboxImage ? (
+            <div
+              onClick={() => setLightboxImage(null)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(15, 23, 42, 0.8)",
+                display: "grid",
+                placeItems: "center",
+                zIndex: 80,
+                backdropFilter: "blur(4px)",
+                animation: "fadeIn 180ms ease",
+              }}
+            >
+              <div
+                onClick={(event) => event.stopPropagation()}
+                style={{
+                  position: "relative",
+                  maxWidth: "90vw",
+                  maxHeight: "90vh",
+                  width: "auto",
+                  height: "auto",
+                  borderRadius: 18,
+                  overflow: "hidden",
+                  boxShadow: "0 28px 80px rgba(15, 23, 42, 0.4)",
+                  animation: "zoomIn 220ms ease",
+                  background: "rgba(15, 23, 42, 0.6)",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setLightboxImage(null)}
+                  aria-label="Fermer l’image"
+                  style={{
+                    position: "absolute",
+                    top: 12,
+                    right: 12,
+                    width: 36,
+                    height: 36,
+                    borderRadius: "50%",
+                    border: "none",
+                    background: "rgba(15, 23, 42, 0.7)",
+                    color: "#ffffff",
+                    display: "grid",
+                    placeItems: "center",
+                    cursor: "pointer",
+                    zIndex: 2,
+                  }}
+                >
+                  <X size={18} />
+                </button>
+                <img
+                  src={lightboxImage}
+                  alt="Image agrandie"
+                  style={{
+                    display: "block",
+                    maxWidth: "90vw",
+                    maxHeight: "90vh",
+                    width: "auto",
+                    height: "auto",
+                    objectFit: "contain",
+                    background: "#020617",
+                  }}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {searchOpen ? (
+            <div
+              style={{
+                borderBottom: `1px solid ${palette.border}`,
+                padding: "12px 18px 0",
+                background: palette.headerBg,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: theme === "dark" ? "rgba(15,23,42,0.7)" : "rgba(248,250,252,0.9)",
+                  border: `1px solid ${palette.border}`,
+                  borderRadius: 12,
+                  padding: "8px 10px",
+                }}
+              >
+                <Search size={16} color={palette.textMuted} />
+                <input
+                  value={searchTerm}
+                  onChange={(event) => {
+                    setSearchTerm(event.target.value);
+                    setSearchIndex(0);
+                  }}
+                  placeholder="Rechercher dans la conversation…"
+                  style={{
+                    flex: 1,
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    color: palette.text,
+                    fontSize: 14,
+                  }}
+                />
+                {searchMatches.length ? (
+                  <>
+                    <button type="button" onClick={() => moveSearchResult(-1)} style={{ border: "none", background: "transparent", color: palette.text, cursor: "pointer", fontWeight: 700 }}>↑</button>
+                    <button type="button" onClick={() => moveSearchResult(1)} style={{ border: "none", background: "transparent", color: palette.text, cursor: "pointer", fontWeight: 700 }}>↓</button>
+                    <span style={{ color: palette.textMuted, fontSize: 12, minWidth: 44, textAlign: "right" }}>
+                      {searchMatches.length ? `${Math.min(searchIndex + 1, searchMatches.length)}/${searchMatches.length}` : "0/0"}
+                    </span>
+                  </>
+                ) : null}
+              </div>
+
+              {searchTerm.trim() && !searchMatches.length ? (
+                <div style={{ color: palette.textMuted, fontSize: 12, padding: "8px 4px 0" }}>Aucun résultat trouvé.</div>
+              ) : null}
+
+              {searchMatches.length ? (
+                <div style={{ display: "grid", gap: 6, padding: "10px 0 12px" }}>
+                  {searchMatches.slice(0, 4).map((message, index) => (
+                    <button
+                      key={message.id}
+                      type="button"
+                      onClick={() => {
+                        setSearchIndex(index);
+                        handleScrollToMessage(message.id);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        width: "100%",
+                        background: index === searchIndex ? "rgba(79,124,255,0.12)" : "transparent",
+                        border: `1px solid ${palette.border}`,
+                        borderRadius: 10,
+                        padding: "8px 10px",
+                        color: palette.text,
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                        {message.text ? renderHighlightedText(message.text.slice(0, 80)) : "Message"}
+                      </span>
+                      <span style={{ color: palette.textMuted, fontSize: 11 }}>{new Date(message.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {sidebarOpen ? (
             <div
@@ -1544,6 +2189,7 @@ export default function ChatPage() {
             ) : null}
 
             <section
+              ref={messagesContainerRef}
               style={{
                 flex: 1,
                 overflowY: "auto",
@@ -1746,11 +2392,33 @@ export default function ChatPage() {
                           >
                             {message.mediaUrl && !isDeleted ? (
                               message.mediaType === "image" ? (
-                                <img
-                                  src={message.mediaUrl}
-                                  alt={message.fileName || "Image envoyée"}
-                                  style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
-                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setLightboxImage(message.mediaUrl || null)}
+                                  style={{
+                                    border: "none",
+                                    background: "transparent",
+                                    padding: 0,
+                                    cursor: "pointer",
+                                    display: "block",
+                                    marginBottom: 8,
+                                  }}
+                                >
+                                  <img
+                                    src={message.mediaUrl}
+                                    alt={message.fileName || "Image envoyée"}
+                                    style={{
+                                      width: 250,
+                                      height: 250,
+                                      maxWidth: "100%",
+                                      maxHeight: 250,
+                                      objectFit: "cover",
+                                      borderRadius: 12,
+                                      display: "block",
+                                      boxShadow: "0 10px 20px rgba(15, 23, 42, 0.12)",
+                                    }}
+                                  />
+                                </button>
                               ) : message.mediaType === "video" ? (
                                 <video
                                   src={message.mediaUrl}
@@ -1758,19 +2426,14 @@ export default function ChatPage() {
                                   style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
                                 />
                               ) : message.mediaType === "audio" ? (
-                                <div style={{ display: "grid", gap: 8, minWidth: 230 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-                                    <Mic size={14} />
-                                    <span>{message.fileName || "Message vocal"}</span>
-                                  </div>
-                                  <audio
-                                    controls
+                                <div style={{ display: "grid", gap: 8, minWidth: 280 }}>
+                                  <VoiceNotePlayer
                                     src={message.mediaUrl}
-                                    style={{ width: "100%", height: 34, outline: "none" }}
+                                    title={message.fileName || "Message vocal"}
+                                    duration={message.audioDuration ?? null}
+                                    isMine={isMine}
+                                    theme={theme}
                                   />
-                                  <div style={{ fontSize: 11, opacity: 0.8 }}>
-                                    {formatDuration(message.audioDuration ?? 0)}
-                                  </div>
                                 </div>
                               ) : (
                                 <a
@@ -2039,6 +2702,64 @@ export default function ChatPage() {
                 );
               })}
             </section>
+
+            {showScrollToBottom ? (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 24,
+                  bottom: 110,
+                  zIndex: 25,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => scrollToBottom("smooth")}
+                  style={{
+                    position: "relative",
+                    width: 42,
+                    height: 42,
+                    border: "none",
+                    borderRadius: "50%",
+                    background: newMessagesCount > 0 ? "linear-gradient(135deg, #f59e0b 0%, #f97316 100%)" : "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
+                    color: "#ffffff",
+                    display: "grid",
+                    placeItems: "center",
+                    boxShadow: "0 14px 28px rgba(79,124,255,0.28)",
+                    cursor: "pointer",
+                    animation: "pulse 1.4s ease-in-out infinite",
+                  }}
+                  aria-label="Revenir en bas"
+                >
+                  <span style={{ fontSize: 18, lineHeight: 1 }}>↓</span>
+                  {newMessagesCount > 0 ? (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: -6,
+                        right: -4,
+                        minWidth: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        background: "#ef4444",
+                        color: "#fff",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        display: "grid",
+                        placeItems: "center",
+                        padding: "0 4px",
+                        border: "2px solid #ffffff",
+                      }}
+                    >
+                      {newMessagesCount > 9 ? "9+" : newMessagesCount}
+                    </span>
+                  ) : null}
+                </button>
+              </div>
+            ) : null}
 
             {replyMessage || editingMessageId ? (
               <div
