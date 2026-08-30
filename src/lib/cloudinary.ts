@@ -1,5 +1,66 @@
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+export async function compressImageFile(file: File, options?: { maxDimension?: number; quality?: number; }): Promise<File> {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") {
+    return file;
+  }
+
+  const maxDimension = options?.maxDimension ?? 1600;
+  const quality = options?.quality ?? 0.8;
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Impossible de lire l’image pour la compression."));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Impossible de décoder l’image à compresser."));
+    img.src = dataUrl;
+  });
+
+  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+  const targetWidth = Math.max(1, Math.round(image.width * scale));
+  const targetHeight = Math.max(1, Math.round(image.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return file;
+  }
+
+  context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+  const outputType = file.type === "image/png" ? "image/png" : "image/jpeg";
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (nextBlob) => {
+        if (!nextBlob) {
+          reject(new Error("La compression de l’image a échoué."));
+          return;
+        }
+        resolve(nextBlob);
+      },
+      outputType,
+      outputType === "image/png" ? undefined : quality,
+    );
+  });
+
+  const extension = outputType === "image/png" ? "png" : "jpg";
+  const nextName = file.name.replace(/\.[^/.]+$/, "") + `-compressed.${extension}`;
+
+  return new File([blob], nextName, {
+    type: outputType,
+    lastModified: Date.now(),
+  });
+}
+
 export function isCloudinaryConfigured() {
   return Boolean(
     process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME &&

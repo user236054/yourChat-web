@@ -6,7 +6,7 @@ export type ChatMessage = {
   senderId?: string;
   senderEmail?: string;
   text: string;
-  status: "sent" | "read";
+  status: "sent" | "read" | "pending";
   createdAt: number;
   mediaUrl?: string;
   mediaType?: "image" | "video" | "audio" | "file";

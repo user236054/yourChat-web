@@ -1,7 +1,7 @@
 "use client";
 
 import { onAuthStateChanged, signOut as firebaseSignOut, updateProfile } from "firebase/auth";
-import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import {
   Check,
   CheckCheck,
@@ -56,7 +56,9 @@ import {
   getNotificationPermissionState,
   storeFcmTokenForCurrentUser,
 } from "@/lib/notifications";
-import { isCloudinaryConfigured, uploadToCloudinary } from "@/lib/cloudinary";
+import { compressImageFile, isCloudinaryConfigured, uploadToCloudinary } from "@/lib/cloudinary";
+import { extractUrls, fetchLinkPreview, type LinkPreview } from "@/lib/link-preview";
+import { enqueueMessage, getQueuedMessageCount, loadQueuedMessages, removeQueuedMessage } from "@/lib/offline-queue";
 import Picker from "emoji-picker-react";
 
 export default function ChatPage() {
@@ -73,7 +75,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [partnerOnline, setPartnerOnline] = useState(false);
-  const [loadingAuth, setLoadingAuth] = useState<boolean | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(false);
+  const [hasHydrated, setHasHydrated] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -86,23 +89,41 @@ export default function ChatPage() {
   const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [isOnline, setIsOnline] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profilePanelOpen, setProfilePanelOpen] = useState(false);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
+  const [partnerProfilePhotoUrl, setPartnerProfilePhotoUrl] = useState<string | null>(null);
   const [profilePhotoLoading, setProfilePhotoLoading] = useState(false);
+  const [linkPreviews, setLinkPreviews] = useState<Record<string, Record<string, LinkPreview | null>>>({});
 
   useEffect(() => {
+    setHasHydrated(true);
     setNotificationPermission(getNotificationPermissionState());
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const storedTheme = window.localStorage.getItem("messagerie-prive-theme");
     if (storedTheme === "light" || storedTheme === "dark") {
       setTheme(storedTheme);
     }
+
+    const updateOnlineStatus = () => {
+      setIsOnline(typeof navigator !== "undefined" ? navigator.onLine : true);
+    };
+
+    updateOnlineStatus();
+    window.addEventListener("online", updateOnlineStatus);
+    window.addEventListener("offline", updateOnlineStatus);
+
+    return () => {
+      window.removeEventListener("online", updateOnlineStatus);
+      window.removeEventListener("offline", updateOnlineStatus);
+    };
   }, []);
 
   useEffect(() => {
@@ -215,8 +236,96 @@ export default function ChatPage() {
     };
   }, [activeUser]);
 
+  useEffect(() => {
+    const tasks: Array<{ messageId: string; url: string }> = [];
+
+    for (const message of messages) {
+      if (!message.text || message.isDeleted) continue;
+      const urls = extractUrls(message.text);
+
+      for (const url of urls) {
+        const currentMessageMap = linkPreviews[message.id] ?? {};
+        if (currentMessageMap[url] !== undefined) continue;
+        tasks.push({ messageId: message.id, url });
+      }
+    }
+
+    if (!tasks.length) return;
+
+    void Promise.allSettled(
+      tasks.map(async ({ messageId, url }) => {
+        const preview = await fetchLinkPreview(url);
+        setLinkPreviews((current) => {
+          const messageMap = { ...(current[messageId] ?? {}) };
+          messageMap[url] = preview ?? null;
+          return { ...current, [messageId]: messageMap };
+        });
+      }),
+    );
+  }, [messages]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleOnline = () => {
+      const queue = loadQueuedMessages();
+      if (!queue.length || !isFirebaseConfigured || !auth?.currentUser) return;
+
+      void (async () => {
+        for (const queued of queue) {
+          try {
+            if (queued.mediaDataUrl && queued.mediaType && queued.mediaType !== "file") {
+              const dataUrlMatches = queued.mediaDataUrl.match(/^data:(.*?);base64,(.*)$/);
+              if (!dataUrlMatches) {
+                continue;
+              }
+
+              const mimeType = dataUrlMatches[1] || "application/octet-stream";
+              const binary = atob(dataUrlMatches[2]);
+              const buffer = new Uint8Array(binary.length);
+
+              for (let index = 0; index < binary.length; index += 1) {
+                buffer[index] = binary.charCodeAt(index);
+              }
+
+              const blob = new Blob([buffer], { type: mimeType });
+              const file = new File([blob], queued.fileName || `queued-${queued.id}.bin`, { type: mimeType });
+              const cloudResult = await uploadToCloudinary(file);
+              await sendMediaMessage({
+                text: queued.text || "",
+                mediaUrl: cloudResult.url,
+                mediaType: cloudResult.type,
+                fileName: cloudResult.fileName,
+                replyTo: queued.replyTo ?? null,
+                audioDuration: queued.audioDuration ?? undefined,
+              });
+            } else {
+              await sendTextMessage(queued.text || "", { replyTo: queued.replyTo ?? null });
+            }
+
+            removeQueuedMessage(queued.id);
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === queued.id ? { ...message, status: "sent" } : message,
+              ),
+            );
+          } catch (error) {
+            console.error("Queued message resend failed", error);
+          }
+        }
+      })();
+    };
+
+    window.addEventListener("online", handleOnline);
+    handleOnline();
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [activeUser]);
+
   const partner = activeUser === "me" ? USERS.friend : USERS.me;
-  const isComposerDisabled = loadingAuth !== false || !activeUser || uploading;
+  const isComposerDisabled = !hasHydrated || loadingAuth || !activeUser || uploading || !isOnline;
   const currentUserUid = auth?.currentUser?.uid;
   const currentUserDisplayName = auth?.currentUser?.displayName || (activeUser ? USERS[activeUser].name : "Utilisateur");
   const messageById = Object.fromEntries(messages.map((message) => [message.id, message]));
@@ -372,6 +481,27 @@ export default function ChatPage() {
     return () => unsubscribe();
   }, [auth?.currentUser?.uid, isFirebaseConfigured]);
 
+  useEffect(() => {
+    if (!isFirebaseConfigured || !auth || !activeUser || !db) {
+      setPartnerProfilePhotoUrl(null);
+      return;
+    }
+
+    const partnerUser = activeUser === "me" ? USERS.friend : USERS.me;
+    const usersRef = collection(db, "users");
+    const unsubscribe = onSnapshot(usersRef, (snapshot) => {
+      const partnerDoc = snapshot.docs.find((documentSnapshot) => {
+        const userData = documentSnapshot.data() as { email?: string | null } | undefined;
+        return userData?.email?.toLowerCase() === partnerUser.email.toLowerCase();
+      });
+
+      const nextPhoto = partnerDoc?.data()?.photoURL ?? partnerUser.photoURL ?? null;
+      setPartnerProfilePhotoUrl(nextPhoto);
+    });
+
+    return () => unsubscribe();
+  }, [activeUser, auth?.currentUser?.uid, isFirebaseConfigured]);
+
   const toggleMessageReaction = async (messageId: string, emoji: string) => {
     if (isFirebaseConfigured && auth?.currentUser) {
       const { toggleMessageReaction: toggleFirestoreReaction } = await import("@/lib/firestore-chat");
@@ -404,7 +534,7 @@ export default function ChatPage() {
     setReactionMenuOpenId(null);
   };
 
-  const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelection = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -418,9 +548,10 @@ export default function ChatPage() {
       return;
     }
 
-    setSelectedFile(file);
-    if (file.type.startsWith("image/") || file.type.startsWith("video/")) {
-      setPreviewUrl(URL.createObjectURL(file));
+    const preparedFile = file.type.startsWith("image/") ? await compressImageFile(file) : file;
+    setSelectedFile(preparedFile);
+    if (preparedFile.type.startsWith("image/") || preparedFile.type.startsWith("video/")) {
+      setPreviewUrl(URL.createObjectURL(preparedFile));
     } else {
       setPreviewUrl(null);
     }
@@ -438,85 +569,149 @@ export default function ChatPage() {
     if (!hasContent || uploading) return;
 
     const trimmedText = draft.trim();
+    const queueEntryId = crypto.randomUUID();
     setDraft("");
     void setTypingState(false);
 
-    if (selectedFile) {
-      try {
-        setUploading(true);
-        const cloudResult = await uploadToCloudinary(selectedFile, setUploadProgress);
+    const createQueuedMultipart = async (payload: { text: string; file?: File; mediaType?: "image" | "video" | "audio" | "file"; fileName?: string; audioDuration?: number | null; }) => {
+      if (!isOnline) {
+        const queuedMessage: Parameters<typeof enqueueMessage>[0] = {
+          id: queueEntryId,
+          createdAt: Date.now(),
+          sender: "me",
+          text: payload.text,
+          status: "pending",
+          replyTo: replyToMessageId ?? null,
+          mediaType: payload.mediaType,
+          fileName: payload.fileName,
+          audioDuration: payload.audioDuration ?? null,
+          mediaDataUrl: payload.file ? await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result ?? ""));
+            reader.onerror = () => reject(new Error("Impossible de sauvegarder le fichier hors ligne."));
+            reader.readAsDataURL(payload.file as File);
+          }) : null,
+        };
 
-        if (isFirebaseConfigured && auth?.currentUser) {
-          await sendMediaMessage({
-            text: trimmedText,
-            mediaUrl: cloudResult.url,
-            mediaType: cloudResult.type,
-            fileName: cloudResult.fileName,
-            replyTo: replyToMessageId ?? null,
-          });
-        } else {
-          const nextMessage: ChatMessage = {
-            id: crypto.randomUUID(),
-            sender: activeUser ?? "me",
-            text: trimmedText,
-            status: "sent",
-            createdAt: Date.now(),
-            mediaUrl: cloudResult.url,
-            mediaType: cloudResult.type,
-            fileName: cloudResult.fileName,
-            replyTo: replyToMessageId ?? null,
-          };
+        enqueueMessage(queuedMessage);
 
-          setMessages((current) => {
-            const next = [...current, nextMessage];
-            saveMessages(next);
-            return next;
-          });
-        }
-      } catch (error) {
-        alert(error instanceof Error ? error.message : "Le fichier n’a pas pu être envoyé.");
-      } finally {
-        setUploadProgress(0);
-        setUploading(false);
+        const pendingMessage: ChatMessage = {
+          id: queuedMessage.id,
+          sender: activeUser ?? "me",
+          text: payload.text,
+          status: "pending",
+          createdAt: queuedMessage.createdAt,
+          mediaUrl: payload.file ? URL.createObjectURL(payload.file) : undefined,
+          mediaType: payload.mediaType,
+          fileName: payload.fileName,
+          replyTo: queuedMessage.replyTo ?? null,
+        };
+
+        setMessages((current) => [...current, pendingMessage]);
         setSelectedFile(null);
         setPreviewUrl(null);
         setReplyToMessageId(null);
         if (fileInputRef.current) {
           fileInputRef.current.value = "";
         }
+        return;
       }
+
+      if (payload.file) {
+        try {
+          setUploading(true);
+          const cloudResult = await uploadToCloudinary(payload.file, setUploadProgress);
+
+          if (isFirebaseConfigured && auth?.currentUser) {
+            await sendMediaMessage({
+              text: payload.text,
+              mediaUrl: cloudResult.url,
+              mediaType: cloudResult.type,
+              fileName: cloudResult.fileName,
+              replyTo: replyToMessageId ?? null,
+            });
+          } else {
+            const nextMessage: ChatMessage = {
+              id: crypto.randomUUID(),
+              sender: activeUser ?? "me",
+              text: payload.text,
+              status: "sent",
+              createdAt: Date.now(),
+              mediaUrl: cloudResult.url,
+              mediaType: cloudResult.type,
+              fileName: cloudResult.fileName,
+              replyTo: replyToMessageId ?? null,
+            };
+
+            setMessages((current) => {
+              const next = [...current, nextMessage];
+              saveMessages(next);
+              return next;
+            });
+          }
+        } catch (error) {
+          alert(error instanceof Error ? error.message : "Le fichier n’a pas pu être envoyé.");
+        } finally {
+          setUploadProgress(0);
+          setUploading(false);
+          setSelectedFile(null);
+          setPreviewUrl(null);
+          setReplyToMessageId(null);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+        }
+        return;
+      }
+
+      if (editingMessageId) {
+        if (isFirebaseConfigured && auth?.currentUser) {
+          await updateMessageText(editingMessageId, payload.text);
+        }
+        resetComposer();
+        return;
+      }
+
+      if (isFirebaseConfigured && auth?.currentUser) {
+        await sendTextMessage(payload.text, { replyTo: replyToMessageId ?? null });
+        resetComposer();
+        return;
+      }
+
+      const nextMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        sender: activeUser ?? "me",
+        text: payload.text,
+        status: "sent",
+        createdAt: Date.now(),
+        replyTo: replyToMessageId ?? null,
+      };
+
+      setMessages((current) => {
+        const next = [...current, nextMessage];
+        saveMessages(next);
+        return next;
+      });
+      resetComposer();
+    };
+
+    if (selectedFile) {
+      const fileToSend = await compressImageFile(selectedFile);
+      await createQueuedMultipart({
+        text: trimmedText,
+        file: fileToSend,
+        mediaType: fileToSend.type.startsWith("image/") ? "image" : fileToSend.type.startsWith("video/") ? "video" : fileToSend.type.startsWith("audio/") ? "audio" : "file",
+        fileName: fileToSend.name,
+      });
       return;
     }
 
     if (editingMessageId) {
-      if (isFirebaseConfigured && auth?.currentUser) {
-        await updateMessageText(editingMessageId, trimmedText);
-      }
-      resetComposer();
+      await createQueuedMultipart({ text: trimmedText });
       return;
     }
 
-    if (isFirebaseConfigured && auth?.currentUser) {
-      await sendTextMessage(trimmedText, { replyTo: replyToMessageId ?? null });
-      resetComposer();
-      return;
-    }
-
-    const nextMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      sender: activeUser ?? "me",
-      text: trimmedText,
-      status: "sent",
-      createdAt: Date.now(),
-      replyTo: replyToMessageId ?? null,
-    };
-
-    setMessages((current) => {
-      const next = [...current, nextMessage];
-      saveMessages(next);
-      return next;
-    });
-    resetComposer();
+    await createQueuedMultipart({ text: trimmedText });
   };
 
   const beginEditMessage = (message: ChatMessage) => {
@@ -1136,8 +1331,8 @@ export default function ChatPage() {
                   boxShadow: `0 10px 24px ${partner.accent}55`,
                 }}
               >
-                {partner.photoURL ? (
-                  <img src={partner.photoURL} alt={partner.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                {partnerProfilePhotoUrl || partner.photoURL ? (
+                  <img src={partnerProfilePhotoUrl || partner.photoURL || undefined} alt={partner.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 ) : (
                   partner.name.charAt(0).toUpperCase()
                 )}
@@ -1279,20 +1474,6 @@ export default function ChatPage() {
                 <Settings size={16} />
                 Profil
               </button>
-
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 10px", borderRadius: 12, border: `1px solid ${palette.border}`, background: theme === "dark" ? "rgba(15,23,42,0.7)" : "rgba(248,250,252,0.9)" }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8, color: palette.text, fontWeight: 600 }}>
-                  {theme === "dark" ? <Moon size={16} /> : <SunMedium size={16} />}
-                  Thème
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
-                  style={{ width: 48, height: 28, borderRadius: 999, border: "none", background: theme === "dark" ? "#8b5cf6" : "#cbd5e1", position: "relative", cursor: "pointer", padding: 0 }}
-                >
-                  <span style={{ position: "absolute", top: 4, left: theme === "dark" ? 26 : 4, width: 20, height: 20, borderRadius: "50%", background: "#ffffff", boxShadow: "0 2px 8px rgba(15, 23, 42, 0.18)", transition: "left 180ms ease" }} />
-                </button>
-              </div>
 
               <div style={{ display: "grid", gap: 8, flex: 1 }}>
                 <div style={{ color: palette.textMuted, fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", padding: "0 8px" }}>Options</div>
@@ -1611,6 +1792,31 @@ export default function ChatPage() {
 
                             {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
 
+                            {message.text ? extractUrls(message.text).map((url) => {
+                              const preview = linkPreviews[message.id]?.[url] ?? null;
+                              if (!preview && !url) return null;
+
+                              return (
+                                <div key={`${message.id}-${url}`} style={{ marginTop: 10, display: "grid", gap: 8, borderRadius: 12, overflow: "hidden", background: isMine ? "rgba(255,255,255,0.08)" : "rgba(148,163,184,0.08)", border: `1px solid ${isMine ? "rgba(255,255,255,0.2)" : palette.border}` }}>
+                                  {preview?.image ? (
+                                    <img src={preview.image} alt={preview.title} style={{ width: "100%", maxHeight: 180, objectFit: "cover", display: "block" }} />
+                                  ) : null}
+                                  <div style={{ padding: "10px 12px", display: "grid", gap: 4 }}>
+                                    <div style={{ fontSize: 10, opacity: 0.8, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                                      {preview?.siteName || "Lien"}
+                                    </div>
+                                    <div style={{ fontWeight: 700, lineHeight: 1.4 }}>{preview?.title || url}</div>
+                                    {preview?.description ? (
+                                      <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>{preview.description}</div>
+                                    ) : null}
+                                    <a href={url} target="_blank" rel="noreferrer" style={{ color: isMine ? "#ffffff" : "#3453d1", textDecoration: "underline", fontSize: 12, wordBreak: "break-all" }}>
+                                      {url}
+                                    </a>
+                                  </div>
+                                </div>
+                              );
+                            }) : null}
+
                             <div
                               style={{
                                 marginTop: 8,
@@ -1626,7 +1832,7 @@ export default function ChatPage() {
                               <span>{readableTime}</span>
                               {message.editedAt ? <span>• modifié</span> : null}
                               {isMine ? (
-                                message.status === "read" ? <CheckCheck size={12} /> : <Check size={12} />
+                                message.status === "pending" ? <span>• en attente</span> : message.status === "read" ? <CheckCheck size={12} /> : <Check size={12} />
                               ) : null}
                             </div>
                           </div>
@@ -2056,25 +2262,6 @@ export default function ChatPage() {
                 opacity: isComposerDisabled ? 0.7 : 1,
               }}
             />
-
-            <button
-              type="button"
-              aria-label="Basculer le thème"
-              onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
-              style={{
-                width: 38,
-                height: 38,
-                border: `1px solid ${palette.border}`,
-                borderRadius: 12,
-                background: theme === "dark" ? "#0b1220" : "#f8fafc",
-                color: palette.text,
-                display: "grid",
-                placeItems: "center",
-                cursor: "pointer",
-              }}
-            >
-              {theme === "dark" ? <SunMedium size={16} /> : <Moon size={16} />}
-            </button>
 
             {isRecording ? (
               <div

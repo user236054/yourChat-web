@@ -3,16 +3,13 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAllowedUser() {
       return request.auth != null && request.auth.token.email in [
-        'me@example.com',
-        'friend@example.com'
+        'lemrack7@gmail.com',
+        'flow@gmail.com'
       ];
     }
 
     function isConversationParticipant() {
-      return isAllowedUser() && request.auth.token.email in [
-        'me@example.com',
-        'friend@example.com'
-      ];
+      return isAllowedUser();
     }
 
     match /conversations/{conversationId} {
@@ -52,7 +49,8 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read, write: if isAllowedUser() && request.auth.uid == userId;
+      allow get, list: if isAllowedUser();
+      allow write: if isAllowedUser() && request.auth.uid == userId;
     }
   }
 }
