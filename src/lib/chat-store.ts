@@ -9,12 +9,14 @@ export type ChatMessage = {
   status: "sent" | "read";
   createdAt: number;
   mediaUrl?: string;
-  mediaType?: "image" | "video" | "file";
+  mediaType?: "image" | "video" | "audio" | "file";
   fileName?: string | null;
   replyTo?: string | null;
   editedAt?: number | null;
   deletedAt?: number | null;
   isDeleted?: boolean;
+  audioDuration?: number | null;
+  reactions?: Record<string, string>;
 };
 
 const STORAGE_KEY = `messagerie-prive-${PRIVATE_CHAT_ID}`;

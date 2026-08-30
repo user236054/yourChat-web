@@ -26,7 +26,8 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow get, list, create: if isAllowedUser();
-        allow update: if isAllowedUser() &&
+        allow update: if isAllowedUser() && (
+        (
           request.auth.token.email == resource.data.senderEmail &&
           request.resource.data.senderEmail == resource.data.senderEmail &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -39,7 +40,13 @@ service cloud.firestore {
             'fileName',
             'status',
             'updatedAt'
-          ]);
+          ])
+        ) || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']) &&
+          request.resource.data.reactions.diff(resource.data.reactions).affectedKeys().hasOnly([request.auth.uid]) &&
+          request.resource.data.reactions[request.auth.uid] is string
+        )
+      );
         allow delete: if isAllowedUser() && request.auth.token.email == resource.data.senderEmail;
       }
     }

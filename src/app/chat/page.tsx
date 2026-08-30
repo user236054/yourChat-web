@@ -6,6 +6,8 @@ import {
   CheckCheck,
   LogOut,
   MessageSquareReply,
+  Mic,
+  MicOff,
   Moon,
   MoreHorizontal,
   MoreVertical,
@@ -16,6 +18,7 @@ import {
   Search,
   SendHorizontal,
   Smile,
+  Square,
   SunMedium,
   Trash2,
   Pencil,
@@ -56,6 +59,9 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingIntervalRef = useRef<number | null>(null);
+  const recordingSecondsRef = useRef(0);
 
   const [activeUser, setActiveUser] = useState<UserKey | null>(null);
   const [draft, setDraft] = useState("");
@@ -71,9 +77,12 @@ export default function ChatPage() {
   const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [reactionMenuOpenId, setReactionMenuOpenId] = useState<string | null>(null);
   const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported" | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   useEffect(() => {
     setNotificationPermission(getNotificationPermissionState());
@@ -153,6 +162,7 @@ export default function ChatPage() {
           isDeleted: Boolean(message.isDeleted),
           deletedAt: message.deletedAt?.toDate ? message.deletedAt.toDate().getTime() : null,
           senderEmail: message.senderEmail,
+          reactions: message.reactions ?? {},
         }))
         .sort((a, b) => a.createdAt - b.createdAt);
 
@@ -243,6 +253,40 @@ export default function ChatPage() {
         bubbleShadow: "0 8px 22px rgba(15, 23, 42, 0.06)",
         floating: "rgba(255,255,255,0.96)",
       };
+
+  const QUICK_REACTIONS = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
+
+  const toggleMessageReaction = async (messageId: string, emoji: string) => {
+    if (isFirebaseConfigured && auth?.currentUser) {
+      const { toggleMessageReaction: toggleFirestoreReaction } = await import("@/lib/firestore-chat");
+      await toggleFirestoreReaction(messageId, emoji);
+      setReactionMenuOpenId(null);
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((message) => {
+        if (message.id !== messageId) return message;
+
+        const existingReactions = message.reactions ?? {};
+        const currentUserId = activeUser === "me" ? USERS.me.id : USERS.friend.id;
+        const previous = existingReactions[currentUserId];
+        const nextReactions = { ...existingReactions };
+
+        if (previous === emoji) {
+          delete nextReactions[currentUserId];
+        } else {
+          nextReactions[currentUserId] = emoji;
+        }
+
+        return {
+          ...message,
+          reactions: Object.keys(nextReactions).length > 0 ? nextReactions : {},
+        };
+      }),
+    );
+    setReactionMenuOpenId(null);
+  };
 
   const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -442,11 +486,20 @@ export default function ChatPage() {
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
+      if (recordingIntervalRef.current) {
+        window.clearInterval(recordingIntervalRef.current);
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
     };
   }, [previewUrl]);
 
   useEffect(() => {
-    const closeMenu = () => setMenuOpenId(null);
+    const closeMenu = () => {
+      setMenuOpenId(null);
+      setReactionMenuOpenId(null);
+    };
     window.addEventListener("click", closeMenu);
     return () => window.removeEventListener("click", closeMenu);
   }, []);
@@ -479,6 +532,121 @@ export default function ChatPage() {
       nextInput.focus();
       nextInput.setSelectionRange(cursorPosition, cursorPosition);
     });
+  };
+
+  const formatDuration = (seconds: number | null | undefined) => {
+    const totalSeconds = Math.max(0, Math.floor(seconds ?? 0));
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainingSeconds = totalSeconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+  };
+
+  const stopRecording = () => {
+    if (recordingIntervalRef.current) {
+      window.clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+
+    setIsRecording(false);
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    if (recordingIntervalRef.current) {
+      window.clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+    recordingSecondsRef.current = 0;
+    setRecordingSeconds(0);
+    setIsRecording(false);
+    setSelectedFile(null);
+    setPreviewUrl(null);
+  };
+
+  const startVoiceRecording = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("L’enregistrement audio n’est pas supporté par ce navigateur.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "";
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const chunks: BlobPart[] = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const recordedBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        stream.getTracks().forEach((track) => track.stop());
+
+        const duration = recordingSecondsRef.current;
+        const fileExt = recordedBlob.type.includes("mp4") ? "m4a" : recordedBlob.type.includes("ogg") ? "ogg" : "webm";
+        const audioFile = new File([recordedBlob], `voice-note-${Date.now()}.${fileExt}`, {
+          type: recordedBlob.type || "audio/webm",
+        });
+
+        recordingSecondsRef.current = 0;
+        setRecordingSeconds(0);
+
+        try {
+          setUploading(true);
+          setUploadProgress(0);
+          const cloudResult = await uploadToCloudinary(audioFile, setUploadProgress);
+          await sendMediaMessage({
+            text: "",
+            mediaUrl: cloudResult.url,
+            mediaType: "audio",
+            fileName: cloudResult.fileName,
+            audioDuration: duration,
+            replyTo: replyToMessageId ?? null,
+          });
+          resetComposer();
+        } catch (error) {
+          alert(error instanceof Error ? error.message : "L’enregistrement audio n’a pas pu être envoyé.");
+        } finally {
+          setUploading(false);
+          setSelectedFile(null);
+          setPreviewUrl(null);
+          setIsRecording(false);
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recordingSecondsRef.current = 0;
+      setRecordingSeconds(0);
+      setIsRecording(true);
+      recorder.start();
+
+      recordingIntervalRef.current = window.setInterval(() => {
+        const nextSeconds = recordingSecondsRef.current + 1;
+        recordingSecondsRef.current = nextSeconds;
+        setRecordingSeconds(nextSeconds);
+
+        if (nextSeconds >= 180) {
+          stopRecording();
+        }
+      }, 1000);
+    } catch (error) {
+      console.error("Micro inaccessible", error);
+      alert("Impossible d’accéder au microphone. Vérifie les autorisations du navigateur.");
+    }
   };
 
   const getQuotedText = (message: ChatMessage | undefined) => {
@@ -686,6 +854,13 @@ export default function ChatPage() {
                 hour: "2-digit",
                 minute: "2-digit",
               });
+              const reactions = message.reactions ?? {};
+              const reactionCounts = Object.entries(reactions).reduce<Record<string, number>>((accumulator, [userId, emoji]) => {
+                accumulator[emoji] = (accumulator[emoji] ?? 0) + 1;
+                return accumulator;
+              }, {});
+              const currentUserReactionKey = activeUser ? USERS[activeUser].id : null;
+              const myReaction = currentUserReactionKey ? reactions[currentUserReactionKey] ?? null : null;
 
               return (
                 <div key={message.id} style={{ display: "grid", gap: 10 }}>
@@ -731,6 +906,17 @@ export default function ChatPage() {
                           messageRefs.current[message.id] = node;
                         }
                       }}
+                      onMouseEnter={() => setReactionMenuOpenId((current) => current ?? message.id)}
+                      onMouseLeave={() => {
+                        setReactionMenuOpenId((current) => (current === message.id ? null : current));
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
+                      }}
+                      onTouchStart={() => {
+                        setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
+                      }}
                       style={{
                         maxWidth: "76%",
                         display: "grid",
@@ -764,6 +950,49 @@ export default function ChatPage() {
                       ) : null}
 
                       <div style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        {reactionMenuOpenId === message.id ? (
+                          <div
+                            style={{
+                              position: "absolute",
+                              right: isMine ? "100%" : "auto",
+                              left: isMine ? "auto" : "100%",
+                              top: -10,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 6,
+                              background: palette.floating,
+                              border: `1px solid ${palette.border}`,
+                              borderRadius: 999,
+                              boxShadow: "0 12px 30px rgba(15, 23, 42, 0.12)",
+                              padding: "8px 10px",
+                              zIndex: 20,
+                              transform: isMine ? "translateX(-8px)" : "translateX(8px)",
+                            }}
+                          >
+                            {QUICK_REACTIONS.map((emoji) => (
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void toggleMessageReaction(message.id, emoji);
+                                }}
+                                style={{
+                                  width: 28,
+                                  height: 28,
+                                  border: "none",
+                                  borderRadius: 999,
+                                  background: myReaction === emoji ? "rgba(79, 124, 255, 0.12)" : "transparent",
+                                  fontSize: 16,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {emoji}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+
                         <div
                           style={{
                             flex: 1,
@@ -780,6 +1009,7 @@ export default function ChatPage() {
                             opacity: isDeleted ? 0.8 : 1,
                             minWidth: 0,
                             maxWidth: "100%",
+                            position: "relative",
                           }}
                         >
                           {message.mediaUrl && !isDeleted ? (
@@ -795,6 +1025,21 @@ export default function ChatPage() {
                                 controls
                                 style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
                               />
+                            ) : message.mediaType === "audio" ? (
+                              <div style={{ display: "grid", gap: 8, minWidth: 230 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+                                  <Mic size={14} />
+                                  <span>{message.fileName || "Message vocal"}</span>
+                                </div>
+                                <audio
+                                  controls
+                                  src={message.mediaUrl}
+                                  style={{ width: "100%", height: 34, outline: "none" }}
+                                />
+                                <div style={{ fontSize: 11, opacity: 0.8 }}>
+                                  {formatDuration(message.audioDuration ?? 0)}
+                                </div>
+                              </div>
                             ) : (
                               <a
                                 href={message.mediaUrl}
@@ -834,6 +1079,29 @@ export default function ChatPage() {
                             ) : null}
                           </div>
                         </div>
+
+                        <button
+                          type="button"
+                          aria-label="Ajouter une réaction"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
+                          }}
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 999,
+                            border: `1px solid ${palette.border}`,
+                            background: theme === "dark" ? "rgba(15,23,42,0.8)" : "rgba(255,255,255,0.8)",
+                            color: palette.text,
+                            display: "grid",
+                            placeItems: "center",
+                            cursor: "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Smile size={12} />
+                        </button>
 
                         <div style={{ position: "relative" }} onClick={(event) => event.stopPropagation()}>
                           <button
@@ -965,6 +1233,49 @@ export default function ChatPage() {
                           ) : null}
                         </div>
                       </div>
+
+                      {Object.keys(reactionCounts).length > 0 ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            justifyContent: isMine ? "flex-end" : "flex-start",
+                            flexWrap: "wrap",
+                            maxWidth: "100%",
+                          }}
+                        >
+                          {Object.entries(reactionCounts).map(([emoji, count]) => {
+                            const isSelectedByCurrentUser = myReaction === emoji;
+                            return (
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={() => void toggleMessageReaction(message.id, emoji)}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                  borderRadius: 999,
+                                  border: `1px solid ${isSelectedByCurrentUser ? "rgba(79,124,255,0.5)" : palette.border}`,
+                                  background: isSelectedByCurrentUser
+                                    ? "rgba(79,124,255,0.12)"
+                                    : theme === "dark"
+                                      ? "rgba(15,23,42,0.8)"
+                                      : "rgba(255,255,255,0.9)",
+                                  color: palette.text,
+                                  padding: "4px 8px",
+                                  fontSize: 12,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <span>{emoji}</span>
+                                <span>{count}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -1213,6 +1524,90 @@ export default function ChatPage() {
           >
             {theme === "dark" ? <SunMedium size={16} /> : <Moon size={16} />}
           </button>
+
+          {isRecording ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: theme === "dark" ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.08)",
+                border: "1px solid rgba(239, 68, 68, 0.3)",
+                color: "#ef4444",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  display: "inline-block",
+                  borderRadius: "50%",
+                  background: "#ef4444",
+                  boxShadow: "0 0 0 6px rgba(239, 68, 68, 0.18)",
+                  animation: "pulse 1s infinite",
+                }}
+              />
+              <span>{formatDuration(recordingSeconds)}</span>
+              <button
+                type="button"
+                onClick={cancelRecording}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#ef4444",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                }}
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={stopRecording}
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 22,
+                  height: 22,
+                  borderRadius: 999,
+                  border: "none",
+                  background: "#ef4444",
+                  color: "#ffffff",
+                  cursor: "pointer",
+                }}
+              >
+                <Square size={10} fill="currentColor" />
+              </button>
+            </div>
+          ) : null}
+
+          {!draft.trim() && !selectedFile ? (
+            <button
+              type="button"
+              aria-label="Enregistrer un message vocal"
+              onClick={() => void startVoiceRecording()}
+              disabled={isComposerDisabled}
+              style={{
+                width: 42,
+                height: 42,
+                border: "none",
+                borderRadius: "50%",
+                background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+                color: "#ffffff",
+                display: "grid",
+                placeItems: "center",
+                boxShadow: "0 14px 28px rgba(34, 197, 94, 0.2)",
+                cursor: isComposerDisabled ? "not-allowed" : "pointer",
+                opacity: isComposerDisabled ? 0.7 : 1,
+              }}
+            >
+              <Mic size={18} />
+            </button>
+          ) : null}
 
           <button
             type="button"

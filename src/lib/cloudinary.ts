@@ -10,7 +10,7 @@ export function isCloudinaryConfigured() {
 export async function uploadToCloudinary(
   file: File,
   onProgress?: (progress: number) => void,
-): Promise<{ url: string; type: "image" | "video" | "file"; fileName: string }> {
+): Promise<{ url: string; type: "image" | "video" | "audio" | "file"; fileName: string }> {
   if (file.size > MAX_UPLOAD_BYTES) {
     throw new Error("Le fichier dépasse la limite de 10 Mo.");
   }
@@ -45,11 +45,13 @@ export async function uploadToCloudinary(
             return;
           }
 
-          const type = file.type.startsWith("video/")
-            ? "video"
-            : file.type.startsWith("image/")
-              ? "image"
-              : "file";
+          const type = file.type.startsWith("audio/")
+            ? "audio"
+            : file.type.startsWith("video/")
+              ? "video"
+              : file.type.startsWith("image/")
+                ? "image"
+                : "file";
 
           resolve({
             url: payload.secure_url,

@@ -21,15 +21,17 @@ export type FirestoreMessage = {
   senderName?: string;
   text?: string;
   mediaUrl?: string;
-  mediaType?: "image" | "video" | "file" | null;
+  mediaType?: "image" | "video" | "audio" | "file" | null;
   fileName?: string | null;
-  type: "text" | "image" | "video" | "file" | "sticker" | "gif";
+  type: "text" | "image" | "video" | "audio" | "file" | "sticker" | "gif";
   createdAt: any;
   status?: "sent" | "read";
   replyTo?: string | null;
   editedAt?: any;
   deletedAt?: any;
   isDeleted?: boolean;
+  audioDuration?: number | null;
+  reactions?: Record<string, string> | null;
 };
 
 export type FirestoreConversation = {
@@ -174,6 +176,7 @@ export async function sendTextMessage(text: string, options?: { replyTo?: string
     editedAt: null,
     deletedAt: null,
     isDeleted: false,
+    reactions: {},
     createdAt: serverTimestamp(),
   });
 }
@@ -181,9 +184,10 @@ export async function sendTextMessage(text: string, options?: { replyTo?: string
 export async function sendMediaMessage(payload: {
   text?: string;
   mediaUrl: string;
-  mediaType: "image" | "video" | "file";
+  mediaType: "image" | "video" | "audio" | "file";
   fileName?: string;
   replyTo?: string | null;
+  audioDuration?: number | null;
 }) {
   if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
 
@@ -204,6 +208,8 @@ export async function sendMediaMessage(payload: {
     editedAt: null,
     deletedAt: null,
     isDeleted: false,
+    audioDuration: payload.mediaType === "audio" ? payload.audioDuration ?? null : null,
+    reactions: {},
     createdAt: serverTimestamp(),
   });
 }
@@ -260,6 +266,25 @@ export async function unpinMessage() {
     },
     { merge: true },
   );
+}
+
+export async function toggleMessageReaction(messageId: string, emoji: string) {
+  if (!db || !auth?.currentUser || !isFirebaseConfigured) return;
+
+  const ref = doc(db, "conversations", PRIVATE_CONVERSATION_ID, "messages", messageId);
+  const snapshot = await getDoc(ref);
+  const currentReactions = (snapshot.data()?.reactions as Record<string, string> | undefined) ?? {};
+  const nextReactions = { ...currentReactions };
+
+  if (nextReactions[auth.currentUser.uid] === emoji) {
+    delete nextReactions[auth.currentUser.uid];
+  } else {
+    nextReactions[auth.currentUser.uid] = emoji;
+  }
+
+  await updateDoc(ref, {
+    reactions: nextReactions,
+  });
 }
 
 export async function markMessageAsRead(messageId: string) {
