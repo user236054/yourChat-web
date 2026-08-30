@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAllowedUser() {
+      return request.auth != null && request.auth.token.email in [
+        'me@example.com',
+        'friend@example.com'
+      ];
+    }
+
+    match /conversations/{conversationId} {
+      allow get, list, create, update, delete: if isAllowedUser();
+
+      match /messages/{messageId} {
+        allow get, list, create, update, delete: if isAllowedUser();
+      }
+    }
+
+    match /users/{userId} {
+      allow read, write: if isAllowedUser() && request.auth.uid == userId;
+    }
+  }
+}
