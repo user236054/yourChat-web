@@ -1500,29 +1500,37 @@ export default function ChatPage() {
 
   return (
     <main
+      className="chat-app"
       style={{
-        width: "100vw",
+        width: "100%",
+        maxWidth: "100%",
         height: "100dvh",
         minHeight: "100vh",
         background: palette.pageBg,
         padding: 0,
         margin: 0,
         overflow: "hidden",
+        paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
       <div
+        className="chat-shell"
         style={{
           width: "100%",
+          maxWidth: "100%",
           height: "100%",
           display: "flex",
           background: palette.panelBg,
           overflow: "hidden",
+          minWidth: 0,
         }}
       >
         <aside
+          className="chat-sidebar"
           style={{
             width: 300,
             minWidth: 300,
+            maxWidth: "100%",
             borderRight: `1px solid ${palette.border}`,
             background: theme === "dark" ? "rgba(15, 23, 42, 0.96)" : "rgba(255,255,255,0.96)",
             backdropFilter: "blur(12px)",
@@ -1762,8 +1770,9 @@ export default function ChatPage() {
           </div>
         ) : null}
 
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <div className="chat-main-panel" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, width: "100%", maxWidth: "100%" }}>
           <header
+            className="chat-header"
             style={{
               position: "sticky",
               top: 0,
@@ -2190,9 +2199,12 @@ export default function ChatPage() {
 
             <section
               ref={messagesContainerRef}
+              className="chat-messages"
               style={{
                 flex: 1,
+                minWidth: 0,
                 overflowY: "auto",
+                overflowX: "hidden",
                 padding: "22px 18px",
                 display: "grid",
                 gap: 14,
@@ -2273,12 +2285,14 @@ export default function ChatPage() {
                     ) : null}
 
                     <div
+                      className="chat-message-row"
                       style={{
                         display: "flex",
                         justifyContent: isMine ? "flex-end" : "flex-start",
                       }}
                     >
                       <div
+                        className="chat-message-shell"
                         ref={(node) => {
                           if (node) {
                             messageRefs.current[message.id] = node;
@@ -2296,9 +2310,12 @@ export default function ChatPage() {
                           setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
                         }}
                         style={{
-                          maxWidth: "76%",
+                          maxWidth: "78%",
+                          width: "100%",
                           display: "grid",
                           gap: 8,
+                          minWidth: 0,
+                          alignItems: isMine ? "flex-end" : "flex-start",
                         }}
                       >
                         {referenceMessage ? (
@@ -2332,8 +2349,8 @@ export default function ChatPage() {
                             <div
                               style={{
                                 position: "absolute",
-                                right: isMine ? "100%" : "auto",
-                                left: isMine ? "auto" : "100%",
+                                right: isMine ? "calc(100% + 8px)" : "auto",
+                                left: isMine ? "auto" : "calc(100% + 8px)",
                                 top: -10,
                                 display: "flex",
                                 alignItems: "center",
@@ -2344,7 +2361,6 @@ export default function ChatPage() {
                                 boxShadow: "0 12px 30px rgba(15, 23, 42, 0.12)",
                                 padding: "8px 10px",
                                 zIndex: 20,
-                                transform: isMine ? "translateX(-8px)" : "translateX(8px)",
                               }}
                             >
                               {QUICK_REACTIONS.map((emoji) => (
@@ -2372,8 +2388,8 @@ export default function ChatPage() {
                           ) : null}
 
                           <div
+                            className="chat-message-bubble"
                             style={{
-                              flex: 1,
                               background: isDeleted
                                 ? theme === "dark" ? "rgba(148, 163, 184, 0.1)" : "#f8fafc"
                                 : isMine
@@ -2386,8 +2402,13 @@ export default function ChatPage() {
                               border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : "1px solid transparent",
                               opacity: isDeleted ? 0.8 : 1,
                               minWidth: 0,
-                              maxWidth: "100%",
+                              maxWidth: "78%",
+                              width: "fit-content",
                               position: "relative",
+                              wordBreak: "break-word",
+                              overflowWrap: "anywhere",
+                              whiteSpace: "pre-wrap",
+                              alignSelf: isMine ? "flex-end" : "flex-start",
                             }}
                           >
                             {message.mediaUrl && !isDeleted ? (
@@ -2395,6 +2416,7 @@ export default function ChatPage() {
                                 <button
                                   type="button"
                                   onClick={() => setLightboxImage(message.mediaUrl || null)}
+                                  className="chat-message-media"
                                   style={{
                                     border: "none",
                                     background: "transparent",
@@ -2402,15 +2424,16 @@ export default function ChatPage() {
                                     cursor: "pointer",
                                     display: "block",
                                     marginBottom: 8,
+                                    width: "100%",
                                   }}
                                 >
                                   <img
                                     src={message.mediaUrl}
                                     alt={message.fileName || "Image envoyée"}
                                     style={{
-                                      width: 250,
-                                      height: 250,
+                                      width: "100%",
                                       maxWidth: "100%",
+                                      height: "auto",
                                       maxHeight: 250,
                                       objectFit: "cover",
                                       borderRadius: 12,
@@ -2421,12 +2444,13 @@ export default function ChatPage() {
                                 </button>
                               ) : message.mediaType === "video" ? (
                                 <video
+                                  className="chat-message-media"
                                   src={message.mediaUrl}
                                   controls
-                                  style={{ maxWidth: "100%", borderRadius: 12, marginBottom: 8, display: "block" }}
+                                  style={{ width: "100%", maxWidth: "100%", height: "auto", borderRadius: 12, marginBottom: 8, display: "block" }}
                                 />
                               ) : message.mediaType === "audio" ? (
-                                <div style={{ display: "grid", gap: 8, minWidth: 280 }}>
+                                <div className="chat-message-media" style={{ display: "grid", gap: 8, width: "100%", minWidth: 0 }}>
                                   <VoiceNotePlayer
                                     src={message.mediaUrl}
                                     title={message.fileName || "Message vocal"}
@@ -2854,6 +2878,7 @@ export default function ChatPage() {
           </div>
 
           <footer
+            className="chat-composer"
             style={{
               position: "sticky",
               bottom: 0,
@@ -2861,7 +2886,7 @@ export default function ChatPage() {
               background: palette.composerBg,
               backdropFilter: "blur(12px)",
               borderTop: `1px solid ${palette.border}`,
-              padding: "14px 16px",
+              padding: "14px 16px calc(14px + env(safe-area-inset-bottom))",
               display: "flex",
               alignItems: "center",
               gap: 10,
@@ -2872,8 +2897,10 @@ export default function ChatPage() {
               aria-label="Ajouter une pièce jointe"
               onClick={() => fileInputRef.current?.click()}
               style={{
-                width: 38,
-                height: 38,
+                width: 44,
+                height: 44,
+                minWidth: 44,
+                minHeight: 44,
                 border: "none",
                 borderRadius: "50%",
                 background: theme === "dark" ? "rgba(139, 92, 246, 0.18)" : "#ede9fe",
@@ -2893,8 +2920,10 @@ export default function ChatPage() {
                 aria-label="Emoji"
                 onClick={() => setEmojiPickerOpen((current) => !current)}
                 style={{
-                  width: 38,
-                  height: 38,
+                  width: 44,
+                  height: 44,
+                  minWidth: 44,
+                  minHeight: 44,
                   border: "1px solid rgba(148,163,184,0.18)",
                   borderRadius: 12,
                   background: theme === "dark" ? "#0f172a" : "#f8fafc",
@@ -2934,24 +2963,6 @@ export default function ChatPage() {
               ) : null}
             </div>
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                width: 38,
-                height: 38,
-                border: "1px solid rgba(148,163,184,0.18)",
-                borderRadius: 12,
-                background: theme === "dark" ? "#0f172a" : "#f8fafc",
-                color: palette.text,
-                display: "grid",
-                placeItems: "center",
-                cursor: "pointer",
-              }}
-            >
-              <Paperclip size={18} />
-            </button>
-
             <input
               ref={fileInputRef}
               type="file"
@@ -2973,6 +2984,8 @@ export default function ChatPage() {
               disabled={isComposerDisabled}
               style={{
                 flex: 1,
+                minWidth: 0,
+                width: "100%",
                 border: `1px solid ${palette.border}`,
                 borderRadius: 18,
                 background: theme === "dark" ? "#0b1220" : "#f8fafc",
@@ -3051,8 +3064,10 @@ export default function ChatPage() {
                 onClick={() => void startVoiceRecording()}
                 disabled={isComposerDisabled}
                 style={{
-                  width: 42,
-                  height: 42,
+                  width: 44,
+                  height: 44,
+                  minWidth: 44,
+                  minHeight: 44,
                   border: "none",
                   borderRadius: "50%",
                   background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
@@ -3073,8 +3088,10 @@ export default function ChatPage() {
               onClick={() => void sendMessage()}
               disabled={isComposerDisabled}
               style={{
-                width: 42,
-                height: 42,
+                width: 44,
+                height: 44,
+                minWidth: 44,
+                minHeight: 44,
                 border: "none",
                 borderRadius: "50%",
                 background: "linear-gradient(135deg, #4f7cff 0%, #6d5efc 100%)",
@@ -3091,6 +3108,97 @@ export default function ChatPage() {
           </footer>
         </div>
       </div>
+      <style jsx global>{`
+        @media (max-width: 767px) {
+          .chat-sidebar {
+            display: none !important;
+          }
+
+          .chat-main-panel {
+            width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          .chat-header {
+            padding: 12px 12px 10px !important;
+          }
+
+          .chat-messages {
+            padding: 14px 12px !important;
+          }
+
+          .chat-message-row {
+            width: 100% !important;
+            max-width: 100% !important;
+            display: flex !important;
+          }
+
+          .chat-message-shell {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          .chat-message-bubble {
+            max-width: 78% !important;
+            width: fit-content !important;
+            min-width: 0 !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+            white-space: pre-wrap !important;
+          }
+
+          .chat-message-media {
+            width: 100% !important;
+            max-width: 100% !important;
+            height: auto !important;
+          }
+
+          .chat-composer {
+            width: 100% !important;
+            max-width: 100% !important;
+            gap: 6px !important;
+            padding-left: 12px !important;
+            padding-right: 12px !important;
+            display: flex !important;
+            align-items: center !important;
+            overflow: hidden !important;
+          }
+
+          .chat-composer > * {
+            min-width: 0 !important;
+            flex-shrink: 0 !important;
+          }
+
+          .chat-composer input {
+            min-width: 0 !important;
+            flex: 1 1 auto !important;
+            width: 100% !important;
+            max-width: 100% !important;
+          }
+
+          .chat-composer button,
+          .chat-header button {
+            min-width: 44px !important;
+            min-height: 44px !important;
+          }
+
+          .chat-composer > button:nth-child(1),
+          .chat-composer > button:nth-child(2),
+          .chat-composer > button:nth-child(3) {
+            width: 42px !important;
+            height: 42px !important;
+            min-width: 42px !important;
+            min-height: 42px !important;
+          }
+        }
+
+        @media (min-width: 768px) {
+          .chat-sidebar {
+            display: flex !important;
+          }
+        }
+      `}</style>
     </main>
   );
 }
