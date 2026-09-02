@@ -2287,8 +2287,11 @@ export default function ChatPage() {
                     <div
                       className="chat-message-row"
                       style={{
+                        width: "100%",
                         display: "flex",
-                        justifyContent: isMine ? "flex-end" : "flex-start",
+                        flexDirection: "column",
+                        alignItems: isMine ? "flex-end" : "flex-start",
+                        marginBottom: 10,
                       }}
                     >
                       <div
@@ -2310,11 +2313,13 @@ export default function ChatPage() {
                           setReactionMenuOpenId((current) => (current === message.id ? null : message.id));
                         }}
                         style={{
-                          maxWidth: "78%",
+                          maxWidth: "min(66vw, calc(100vw - 96px))",
                           width: "100%",
-                          display: "grid",
+                          display: "flex",
+                          flexDirection: "column",
                           gap: 8,
                           minWidth: 0,
+                          boxSizing: "border-box",
                           alignItems: isMine ? "flex-end" : "flex-start",
                         }}
                       >
@@ -2402,13 +2407,15 @@ export default function ChatPage() {
                               border: isDeleted ? "1px dashed rgba(148,163,184,0.3)" : "1px solid transparent",
                               opacity: isDeleted ? 0.8 : 1,
                               minWidth: 0,
-                              maxWidth: "78%",
+                              maxWidth: "min(66vw, calc(100vw - 96px))",
                               width: "fit-content",
                               position: "relative",
+                              boxSizing: "border-box",
                               wordBreak: "break-word",
-                              overflowWrap: "anywhere",
+                              overflowWrap: "break-word",
                               whiteSpace: "pre-wrap",
                               alignSelf: isMine ? "flex-end" : "flex-start",
+                              marginBottom: 0,
                             }}
                           >
                             {message.mediaUrl && !isDeleted ? (
@@ -2477,7 +2484,18 @@ export default function ChatPage() {
                               )
                             ) : null}
 
-                            {bubbleText ? <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{bubbleText}</div> : null}
+                            {bubbleText ? (
+                              <div
+                                style={{
+                                  lineHeight: 1.5,
+                                  whiteSpace: "pre-wrap",
+                                  overflowWrap: "break-word",
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                {bubbleText}
+                              </div>
+                            ) : null}
 
                             {message.text ? extractUrls(message.text).map((url) => {
                               const preview = linkPreviews[message.id]?.[url] ?? null;
@@ -3083,6 +3101,8 @@ export default function ChatPage() {
               </button>
             ) : null}
 
+
+             {draft.trim() || selectedFile ? (
             <button
               type="button"
               onClick={() => void sendMessage()}
@@ -3105,6 +3125,11 @@ export default function ChatPage() {
             >
               <SendHorizontal size={18} />
             </button>
+         ) : null}
+        
+        
+
+          
           </footer>
         </div>
       </div>
@@ -3140,7 +3165,7 @@ export default function ChatPage() {
           }
 
           .chat-message-bubble {
-            max-width: 78% !important;
+            max-width: 68% !important;
             width: fit-content !important;
             min-width: 0 !important;
             overflow-wrap: anywhere !important;
